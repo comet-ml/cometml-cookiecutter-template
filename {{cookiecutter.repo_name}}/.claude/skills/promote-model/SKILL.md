@@ -1,20 +1,20 @@
 ---
 name: promote-model
-description: Manage a Comet Model Registry version's status and tags — set the single-value status (None / Development / Staging / QA / Production) and/or add/remove free-form tags. Confirms before mutating. Optionally gates on a passing `evaluate-run` outcome. Use when the user asks to "promote", "demote", "set status", "tag", or "retag" a model.
+description: Manage a Comet Model Registry version's status and/or tags via `scripts/registry_mutate.py`. Status is a single-value enum (None / Development / Staging / QA / Production by default; workspace-configurable). Tags are a multi-value free-form list. Confirms before mutating. Optionally gates on a passing `evaluate-run` outcome. Use when the user asks to "promote", "demote", "set status", "tag", "untag", or "retag" a model.
 ---
 
 # Promote Model
 
-Mutate a Comet Model Registry version's **status** and/or **tags**.
+Mutate a Comet Model Registry version's **status** and/or **tags** via the project-local helper script `scripts/registry_mutate.py`.
 
 These are two different fields in the registry — don't conflate them:
 
-| Field | Cardinality | Values | Purpose |
-|-------|-------------|--------|---------|
-| **Status** | Single value per version | `None`, `Development`, `Staging`, `QA`, `Production` (Comet's standard set — confirm against the registry UI for your workspace's exact options) | Lifecycle stage. Deploy pipelines that fetch "the production version" use this. |
-| **Tags** | Multi-value list per version | Free-form strings, e.g. `champion`, `canary`, `lr=0.01`, `paper-2026` | Free-form labels for slicing, A/B groups, descriptive metadata. |
+| Field | Cardinality | Default values | Real SDK call |
+|-------|-------------|----------------|---------------|
+| **Status** | Single value per version | `None`, `Development`, `Staging`, `QA`, `Production` (workspace-configurable; check with `python scripts/registry_mutate.py allowed-statuses`) | `api.get_model(ws, name).set_status(version, status)` |
+| **Tags** | Multi-value list per version | Free-form: `champion`, `canary`, `lr=0.01`, `paper-2026`, etc. | `Model.add_tag(version, tag)` / `Model.delete_tag(version, tag)` — single-tag operations, no bulk |
 
-Both are write operations on a registered version. The skill always confirms before mutating.
+All mutations go through `scripts/registry_mutate.py`. The skill never invokes `python -c "..."` with interpolated user values — argparse handles quoting safely so a malicious model name like `foo'; rm -rf /` can't escape.
 
 ## When to run
 
@@ -23,73 +23,74 @@ Both are write operations on a registered version. The skill always confirms bef
 - "Demote the current prod" → set status of the current Production version to `Development` or `None`.
 - "Tag it as `champion`" → add tag.
 - "Drop the `canary` tag" → remove tag.
-- Combinations: "promote to production and add tag `release-2026-05`".
+- Combinations: "promote to production and tag as `release-2026-05`".
 
 ## Inputs
 
 - **`model_name`** (required) — registry name, e.g. `iris-classifier`.
-- **`evaluation_experiment_id`** — optional. If provided, invokes `/evaluate-run <id>` first and refuses to mutate if FAIL.
+- **`evaluation_experiment_id`** — optional. If provided, invoke `/evaluate-run <id>` first and refuse to mutate if FAIL.
 
 Everything else (which version, what status, which tags) is **chosen interactively** based on the registry's current state.
 
 ## Procedure
 
-### 1. Fetch registry state
+### 1. Inspect current state
 
 ```bash
-uv run python -c "
-from comet_ml import API
-from {{ cookiecutter.module_name }} import config
-
-api = API(api_key=config.COMET_API_KEY)
-versions = api.get_registry_model_versions(
-    workspace=config.COMET_WORKSPACE,
-    registry_name='<model_name>',
-)
-for v in versions:
-    status = v.get('status') or v.get('stage') or 'None'
-    tags = ','.join(v.get('tags', [])) or '(no tags)'
-    print(v.get('version'), '|', status, '|', tags)
-"
+uv run python scripts/registry_mutate.py list --model <model_name>
 ```
 
-If the model isn't found, stop and list the registry models that *do* exist.
+Output is JSON with one entry per version: `{"version": "1.2.0", "status": "Staging", "tags": ["candidate", "lr=0.01"]}`.
 
-> **API surface note.** The status field has been called different things across `comet-ml` releases (`stage`, `stages`, `status`). The exact getter/setter may be `update_registry_model_version` with a `stage=` or `status=` kwarg, or a dedicated `set_model_version_stage` method. If the call below fails, run `python -c "from comet_ml import API; help(API.update_registry_model_version)"` and `python -c "from comet_ml import API; print([m for m in dir(API) if 'registry' in m.lower() or 'stage' in m.lower() or 'status' in m.lower()])"` to find the current method shape. Reference: <https://www.comet.com/docs/v2/api-and-sdk/python-sdk/reference/API/>.
+If you get `Model '<x>' not found`:
 
-### 2. Render current state
+```bash
+uv run python scripts/registry_mutate.py list-models
+```
+
+Pick the right one or stop with "no such model".
+
+### 2. Check the workspace's allowed status values
+
+```bash
+uv run python scripts/registry_mutate.py allowed-statuses
+```
+
+Returns a JSON list. Comet's default set is `["None", "Development", "Staging", "QA", "Production"]` but workspaces can customize. Validate the user's requested status against this list **before** mutating — otherwise the server will reject with an unclear error.
+
+### 3. Render current state to the user
 
 ```markdown
 ### iris-classifier — current registry state
 
-| Version | Status      | Tags |
-|---------|-------------|------|
-| 1.2.0   | Staging     | candidate, lr=0.01 |
-| 1.1.0   | Production  | champion |
-| 1.0.0   | Development | (no tags) |
+| Version | Status | Tags |
+|---------|--------|------|
+| 1.2.0 | Staging | candidate, lr=0.01 |
+| 1.1.0 | Production | champion |
+| 1.0.0 | Development | (no tags) |
 ```
 
-### 3. Ask the user what to change
+### 4. Ask the user what to change
 
 Offer the menu:
 
-- **Set status** of a version to one of: `None`, `Development`, `Staging`, `QA`, `Production` (or whatever the registry UI shows for the workspace).
+- **Set status** of a version (pick one from the allowed list).
 - **Add tag(s)** to a version.
 - **Remove tag(s)** from a version.
-- **Multiple operations in one go** — collect them, then confirm together.
+- **Combinations** — collect them, confirm together.
 
-Interpret natural-language requests:
+Interpret natural language:
 
 - "Promote 1.2.0 to production" → set status of 1.2.0 to `Production`.
-- "Demote 1.1.0" → ask whether to `Development` or `None`. Don't assume.
+- "Demote 1.1.0" → ask whether `Development` or `None`. Don't assume.
 - "Make 1.2.0 the champion" → add tag `champion` to 1.2.0; ask whether to also remove `champion` from any other version (champion is usually exclusive).
-- "Move staging" → ambiguous (status or tag?). Ask the user. Default: status.
+- "Move staging" → ambiguous (status or tag?). Ask. Default: status.
 
-### 4. Optional eval gate
+### 5. Optional eval gate
 
 If `evaluation_experiment_id` was given, invoke `/evaluate-run <id>` and require PASS. On FAIL: refuse the mutation. Print failing metrics.
 
-### 5. Confirmation block
+### 6. Confirmation block
 
 Present verbatim. Wait for explicit "yes":
 
@@ -100,7 +101,7 @@ REGISTRY MUTATION — CONFIRMATION
 Model:           iris-classifier
 Operations:
   • SET STATUS    version 1.2.0:  Staging → Production
-  • REMOVE STATUS version 1.1.0:  Production → None
+  • SET STATUS    version 1.1.0:  Production → None
   • ADD TAG       version 1.2.0:  +release-2026-05
 
 Eval gate:       PASSED (experiment abc123…)
@@ -111,60 +112,47 @@ manual cleanup — confirm you intend this change.
 ============================================================
 ```
 
-For each operation type, show the before/after explicitly. If the user combined operations, list them all in this block before any mutation runs.
+### 7. Execute via the helper
 
-### 6. Execute
-
-Run mutations sequentially. Stop on first failure — do **not** continue and leave the registry half-changed. If a mutation fails, surface the API error and tell the user the state is partially applied (and what was applied).
+Run one sub-command per operation. Stop on first non-zero exit — do NOT continue and leave the registry half-changed. Report which operations succeeded and which didn't.
 
 ```bash
-uv run python -c "
-from comet_ml import API
-from {{ cookiecutter.module_name }} import config
+# Set status
+uv run python scripts/registry_mutate.py set-status \
+    --model iris-classifier --version 1.2.0 --status Production
 
-api = API(api_key=config.COMET_API_KEY)
+# Demote a prior holder of a single-value status (Comet doesn't auto-clear it)
+uv run python scripts/registry_mutate.py set-status \
+    --model iris-classifier --version 1.1.0 --status None
 
-# Set status — exact kwarg name depends on SDK version (see note above):
-api.update_registry_model_version(
-    workspace=config.COMET_WORKSPACE,
-    registry_name='<model_name>',
-    version='<version>',
-    status='<new_status>',  # or stage='<new_status>'
-)
+# Add a tag
+uv run python scripts/registry_mutate.py add-tag \
+    --model iris-classifier --version 1.2.0 --tag release-2026-05
 
-# Add tag — preserve existing tags:
-current = next(v for v in api.get_registry_model_versions(
-    workspace=config.COMET_WORKSPACE,
-    registry_name='<model_name>',
-) if v['version'] == '<version>')
-new_tags = list(set(current.get('tags', []) + ['<tag_to_add>']))
-api.update_registry_model_version(
-    workspace=config.COMET_WORKSPACE,
-    registry_name='<model_name>',
-    version='<version>',
-    tags=new_tags,
-)
-"
+# Remove a tag
+uv run python scripts/registry_mutate.py remove-tag \
+    --model iris-classifier --version 1.2.0 --tag canary
 ```
 
-### 7. Verify
+Note: status is a single-value field, but Comet does NOT automatically clear it from a prior holder when you set a new one. If you're "moving" a status (e.g. Production from 1.1.0 to 1.2.0), explicitly set the prior holder to `None` (or whatever target stage you want) — otherwise the registry briefly has two versions claiming `Production`.
 
-Re-fetch the registry state and print the post-change table side by side with the pre-change one. Highlight the changed rows.
+### 8. Verify
 
-Print the registry URL: `https://www.comet.com/<workspace>/model-registry/<model_name>`.
+Re-run `list` and print the before/after side by side. Highlight changed rows. Print the registry URL: `https://www.comet.com/<workspace>/model-registry/<model_name>`.
 
 ## Anti-patterns
 
 - **Never mutate without explicit user confirmation.** Bypass = raw API call.
-- **Don't conflate status and tags.** Status is a single enum value; tags are a free-form list. The user said "tag it for production" — interpret carefully: do they mean *set status to Production* (lifecycle) or *add a tag called `production`* (label)? Default to status when ambiguous, but ask first.
-- **Don't strip preserved tags.** If a version is tagged `lr=0.01,dataset=v2,canary` and you're removing `canary`, leave the others intact.
+- **Don't conflate status and tags.** "Tag it for production" is ambiguous — ask whether they mean status `Production` (lifecycle) or tag `production` (label). Default to status when ambiguous.
+- **Don't strip preserved tags.** Removing one tag must leave the rest intact — `Model.delete_tag(version, tag)` does this correctly (single-tag op), but don't fall back to a bulk-overwrite call.
 - **Don't promote a version that's already at the target status.** Print the no-op and stop.
-- **Don't change status to something not in the registry's allowed set.** If the workspace customized the status list and the user asks for `Shipped`, verify that status exists first.
-- **Don't auto-demote the current holder of a status** without telling the user. Comet's status field is single-value per version, but if N versions claim `Production` simultaneously (which can happen), surface that anomaly rather than silently fixing it.
-- **Don't create new tags from typos.** If the user asks to add `prdcution`, confirm whether they meant `production`.
+- **Don't change status to a value not in `allowed-statuses`.** The server rejects with a vague error.
+- **Don't auto-demote the current status holder.** Surface the conflict and have the user explicitly demote.
+- **Don't construct shell or Python commands by string-interpolating user input.** Always use the `scripts/registry_mutate.py` helper — argparse handles quoting.
 
 ## Cross-references
 
-- `.claude/rules/comet-em-best-practices.md` section 6 — registry conventions (status vs tags, versioning, descriptions).
+- `.claude/rules/comet-em-best-practices.md` section 6 — registry conventions.
 - `evaluate-run` — upstream gate.
+- `scripts/registry_mutate.py` — implementation of all mutations.
 - Comet API reference: <https://www.comet.com/docs/v2/api-and-sdk/python-sdk/reference/API/>.

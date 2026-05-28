@@ -1,0 +1,12 @@
+{
+  "project_name": "My Comet ML Project",
+  "repo_name": "{{ cookiecutter.project_name|lower|replace(' ', '-')|replace('_', '-') }}",
+  "module_name": "{{ cookiecutter.project_name|lower|replace(' ', '_')|replace('-', '_') }}",
+  "description": "A Comet-tracked ML project.",
+  "author_name": "Your Name",
+  "author_email": "you@example.com",
+  "python_version": ["3.12", "3.10", "3.11", "3.13"],
+  "framework": ["sklearn", "xgboost", "pytorch", "tensorflow", "none"],
+  "comet_url_override": "https://www.comet.com/clientlib/",
+  "open_source_license": ["MIT", "Apache-2.0", "Proprietary", "None"]
+}

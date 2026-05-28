@@ -19,6 +19,21 @@ Consult that page first when diagnosing:
 
 All settings can be set via env var (preferred — keep them in `.env`), via `.comet.config`, or programmatically via `comet_ml.config.set_config`. Env var wins.
 
+## Reference: Comet MCP server (for AI agents)
+
+This project ships a `.mcp.json` that auto-registers the [Comet MCP server](https://www.comet.com/docs/v2/api-and-sdk/mcp-server/overview/) with Claude Code. The MCP server exposes tools for:
+
+- Listing and inspecting experiments
+- Fetching metrics, parameters, code, and metadata for any experiment
+- Listing projects in the workspace
+- Checking connection status
+
+**Prefer MCP queries over local log parsing.** When the user asks "what did the last run achieve" or "compare runs X and Y", call the MCP server — it returns the canonical Comet state. Local `make train` logs may be stale or truncated.
+
+For shell setup (loading `.env` into the environment so the MCP server picks up credentials), see the README's "MCP setup" section.
+
+The MCP server does **not** currently expose registry mutations (status / tags). Those go through `comet_ml.API` directly — see the `promote-model` skill.
+
 ## 0. Credentials — never hardcode
 
 - Read `COMET_API_KEY`, `COMET_WORKSPACE`, `COMET_PROJECT_NAME`, `COMET_URL_OVERRIDE` from `src/{{ cookiecutter.module_name }}/config.py` (loads `.env` via `python-dotenv`).
@@ -145,15 +160,29 @@ The **Model Registry** is the workspace-level catalog used by deploy/serve pipel
 experiment.register_model(
     model_name="iris-classifier",                # registry name (workspace-unique)
     version="1.0.0",                             # optional — Comet auto-increments if omitted
-    tags=["staging"],                            # ["staging"], ["production"], or custom
+    tags=["staging"],                            # free-form tags (see status vs tags below)
     public=False,
     description="Baseline LR; trained on iris-v1 dataset.",
 )
 ```
 
-Conventions:
+### Status vs tags — two different fields
 
-- **tags** — start at `staging`. Promote to `production` only after evaluation passes a gate (separate run, separate metric thresholds). Tags are the modern Comet API for stage labels (replaces the deprecated `stages=`).
+The registry has **two independent labels** on every version. Don't conflate them.
+
+| Field | Cardinality | Values | Set by |
+|-------|-------------|--------|--------|
+| **Status** | One per version | `None` / `Development` / `Staging` / `QA` / `Production` (Comet's standard set; workspace-configurable) | `API.update_registry_model_version(...)` — single enum value. Used by deploy/serve pipelines that fetch "the Production version". |
+| **Tags** | Many per version | Free-form strings: `champion`, `canary`, `lr=0.01`, `paper-2026`, etc. | `experiment.register_model(tags=[...])` at registration time; `API.update_registry_model_version(tags=[...])` after the fact. Used for slicing, A/B groups, descriptive metadata. |
+
+At registration time, `experiment.register_model` only exposes `tags=`. To set the **status**, use the `/promote-model` skill or call `API.update_registry_model_version` after registration.
+
+A new version typically lands in the registry with status `None` (or `Development`) and a `staging` tag if you want to mark it as a deploy candidate. Move it to status `Production` once evaluation passes.
+
+### Conventions
+
+- **status** — only one Production version at a time per registry. The deploy pipeline pulls "the Production model" by status, so duplicate Production status leads to ambiguous routing.
+- **tags** — anything goes; common patterns: lifecycle (`champion`, `canary`, `challenger`), provenance (`paper-2026`, `release-2026-05`), config (`lr=0.01`, `dataset=v2`).
 - **version** — semver. Bump minor for retrains on same data + tweaked hparams, bump major for new dataset or new architecture.
 - **description** — terse, references the dataset version and any non-default training config.
 

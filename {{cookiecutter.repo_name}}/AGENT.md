@@ -13,6 +13,7 @@ Briefing for AI coding assistants working in this repo (Claude Code, Cursor, Aid
 - **Experiment tracking**: [Comet EM](https://www.comet.com/docs/v2/) via the `comet-ml` Python SDK
 - **ML framework**: {{ cookiecutter.framework }}
 - **Layout**: `src/` layout, package = `{{ cookiecutter.module_name }}`
+- **MCP**: `.mcp.json` at repo root auto-loads the [Comet MCP server](https://www.comet.com/docs/v2/api-and-sdk/mcp-server/overview/) on Claude Code launch — use it to query experiments, metrics, projects, registry. Requires `set -a && source .env && set +a` before launching Claude Code so env vars are in the shell.
 
 ## Layout
 
@@ -60,6 +61,17 @@ Detailed rules in `.claude/rules/comet-em-best-practices.md`.
 ## Where to look first
 
 - `.claude/rules/` — behavioral rules you must follow.
-- `.claude/skills/` — guided multi-step workflows (update-readme, update-makefile, update-changelog).
+- `.claude/skills/` — guided multi-step workflows:
+  - **Comet EM lifecycle**: `run-training`, `evaluate-run`, `compare-runs`, `promote-model`
+  - **Repo upkeep**: `update-readme`, `update-makefile`, `update-changelog`
+- `.mcp.json` — registers the Comet MCP server (query experiments, metrics, registry).
 - `CONTRIBUTING.md` — branch naming, PR checklist.
 - `pyproject.toml` — dependency list, tool config.
+
+## Typical agentic workflow
+
+1. User: "train and evaluate a new run."
+2. Agent: `/run-training` → capture experiment ID + URL.
+3. Agent: `/evaluate-run <id>` → pull metrics via MCP, check thresholds, report pass/fail.
+4. If PASS and user wants to promote: `/promote-model <model_name>` → discover registry state, propose status/tag change, confirm, mutate.
+5. To pick between candidates: `/compare-runs <id1> <id2>` → markdown diff.

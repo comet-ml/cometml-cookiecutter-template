@@ -19,6 +19,26 @@ Consult that page first when diagnosing:
 
 All settings can be set via env var (preferred — keep them in `.env`), via `.comet.config`, or programmatically via `comet_ml.config.set_config`. Env var wins.
 
+## Reference: Comet MCP server (for AI agents)
+
+This project ships a `.mcp.json` that auto-registers the [Comet MCP server](https://www.comet.com/docs/v2/api-and-sdk/mcp-server/overview/) with Claude Code. The MCP server exposes these tools (snake_case, not `comet-mcp__list-experiments` style):
+
+| Tool | Purpose |
+|------|---------|
+| `list_experiments` | List experiments in a project |
+| `get_experiment_details` | Metadata, tags, URL for one experiment |
+| `get_experiment_metric_data` | All logged metric values + steps |
+| `get_experiment_parameters` | Hyperparameters |
+| `list_projects` | Projects in the workspace |
+
+**Prefer MCP queries over local log parsing.** When the user asks "what did the last run achieve" or "compare runs X and Y", call the MCP server — it returns the canonical Comet state. Local `make train` logs may be stale or truncated.
+
+For shell setup (loading `.env` into the environment so the MCP server picks up credentials), see the README's "MCP setup" section.
+
+The MCP server does **not** currently expose registry mutations (status / tags). Those go through `comet_ml.API` directly via `scripts/registry_mutate.py` — see the `promote-model` skill. The MCP server also does not expose registry reads — registry state (versions, status, tags) comes from `scripts/registry_mutate.py list ...` as well.
+
+If an MCP tool ever returns an unexpected error or the name has shifted in a newer release, fall back to direct `comet_ml.API` calls — every skill includes the fallback snippet. Don't silently swallow MCP errors.
+
 ## 0. Credentials — never hardcode
 
 - Read `COMET_API_KEY`, `COMET_WORKSPACE`, `COMET_PROJECT_NAME`, `COMET_URL_OVERRIDE` from `src/{{ cookiecutter.module_name }}/config.py` (loads `.env` via `python-dotenv`).
@@ -145,15 +165,70 @@ The **Model Registry** is the workspace-level catalog used by deploy/serve pipel
 experiment.register_model(
     model_name="iris-classifier",                # registry name (workspace-unique)
     version="1.0.0",                             # optional — Comet auto-increments if omitted
-    tags=["staging"],                            # ["staging"], ["production"], or custom
+    tags=["staging"],                            # free-form tags (see status vs tags below)
     public=False,
     description="Baseline LR; trained on iris-v1 dataset.",
 )
 ```
 
-Conventions:
+### Status vs tags — two different fields
 
-- **tags** — start at `staging`. Promote to `production` only after evaluation passes a gate (separate run, separate metric thresholds). Tags are the modern Comet API for stage labels (replaces the deprecated `stages=`).
+The registry has **two independent labels** on every version. Don't conflate them.
+
+| Field | Cardinality | Default values | Used by |
+|-------|-------------|----------------|---------|
+| **Status** | One per version | `None`, `Development`, `Staging`, `QA`, `Production` (Comet's standard set; workspace-configurable) | Deploy/serve pipelines that fetch "the Production version". |
+| **Tags** | Many per version | Free-form strings: `champion`, `canary`, `lr=0.01`, `paper-2026`, etc. | Slicing, A/B groups, descriptive metadata. |
+
+### How to set them
+
+**At registration time** — `experiment.register_model` accepts BOTH `tags=` and `status=`:
+
+```python
+experiment.register_model(
+    model_name="iris-classifier",
+    version="1.0.0",
+    status="Development",            # single-value enum from allowed-statuses
+    tags=["example", "lr=0.01"],     # multi-value free-form
+    description="Baseline LR; trained on iris-v1 dataset.",
+)
+```
+
+**After registration** — use the `comet_ml.API` + `Model` object. The exact methods (verified against `comet-ml` 3.x):
+
+```python
+from comet_ml import API
+api = API()
+model = api.get_model(workspace="<ws>", model_name="iris-classifier")
+
+# Allowed status values (workspace-configurable):
+api.model_registry_allowed_status_values(workspace="<ws>")
+
+# Status — single-value setter:
+model.set_status(version="1.0.0", status="Production")
+
+# Tags — single-tag add/remove (NO bulk-set call exists):
+model.add_tag(version="1.0.0", tag="champion")
+model.delete_tag(version="1.0.0", tag="canary")
+
+# Inspect current state:
+versions = model.find_versions()                # list of version strings
+details = model.get_details(version="1.0.0")    # dict with status, tags, etc.
+```
+
+The training examples in `src/<module>/train.py` register with `status="Development"` + `tags=["example"]`. To advance status (Staging → QA → Production), use the `/promote-model` skill, which wraps these calls in `scripts/registry_mutate.py` with safe argv handling.
+
+### Conventions
+
+- **status** — only one Production version at a time per registry. The deploy pipeline pulls by status, so duplicate Production status leads to ambiguous routing. **Comet does NOT auto-demote** the prior holder when you set a new one — you must explicitly set the old version's status to something else.
+- **tags** — anything goes; common patterns: lifecycle (`champion`, `canary`, `challenger`), provenance (`paper-2026`, `release-2026-05`), config (`lr=0.01`, `dataset=v2`).
+- **version** — semver. Bump minor for retrains on same data + tweaked hparams, bump major for new dataset or new architecture.
+- **description** — terse, references the dataset version and any non-default training config.
+
+### Conventions
+
+- **status** — only one Production version at a time per registry. The deploy pipeline pulls "the Production model" by status, so duplicate Production status leads to ambiguous routing.
+- **tags** — anything goes; common patterns: lifecycle (`champion`, `canary`, `challenger`), provenance (`paper-2026`, `release-2026-05`), config (`lr=0.01`, `dataset=v2`).
 - **version** — semver. Bump minor for retrains on same data + tweaked hparams, bump major for new dataset or new architecture.
 - **description** — terse, references the dataset version and any non-default training config.
 

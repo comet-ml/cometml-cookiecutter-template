@@ -94,11 +94,14 @@ def main() -> None:
         joblib.dump(model, model_path)
         experiment.log_model(name=MODEL_NAME, file_or_folder=str(model_path))
 
-        # --- 5. Register to Model Registry (promote to staging) -------------
+        # --- 5. Register to Model Registry --------------------------------
+        # Sets initial status to Development + tag "example".
+        # Use the /promote-model skill to advance status (Staging/QA/Production).
         # Comment out if you only want to log models inside experiments.
         experiment.register_model(
             model_name=MODEL_NAME,
-            tags=["staging"],
+            status="Development",
+            tags=["example"],
             description="Baseline sklearn LogisticRegression trained on iris-dataset.",
         )
     finally:
@@ -180,10 +183,13 @@ def main() -> None:
         model.save_model(str(model_path))
         experiment.log_model(name=MODEL_NAME, file_or_folder=str(model_path))
 
-        # --- 5. Register to Model Registry (promote to staging) -------------
+        # --- 5. Register to Model Registry --------------------------------
+        # Sets initial status to Development + tag "example".
+        # Use the /promote-model skill to advance status (Staging/QA/Production).
         experiment.register_model(
             model_name=MODEL_NAME,
-            tags=["staging"],
+            status="Development",
+            tags=["example"],
             description="Baseline XGBClassifier trained on iris-dataset.",
         )
     finally:
@@ -251,9 +257,12 @@ def main() -> None:
         experiment.log_model(name=MODEL_NAME, file_or_folder=str(model_path))
 
         # --- Register to Model Registry -----------------------------------
+        # Sets initial status to Development + tag "example".
+        # Use the /promote-model skill to advance status (Staging/QA/Production).
         experiment.register_model(
             model_name=MODEL_NAME,
-            tags=["staging"],
+            status="Development",
+            tags=["example"],
             description="Tiny 2-layer MLP, single training step on synthetic data.",
         )
     finally:
@@ -313,9 +322,12 @@ def main() -> None:
         experiment.log_model(name=MODEL_NAME, file_or_folder=str(model_path))
 
         # --- Register to Model Registry -----------------------------------
+        # Sets initial status to Development + tag "example".
+        # Use the /promote-model skill to advance status (Staging/QA/Production).
         experiment.register_model(
             model_name=MODEL_NAME,
-            tags=["staging"],
+            status="Development",
+            tags=["example"],
             description="Tiny 2-layer Keras MLP, single train_on_batch on synthetic data.",
         )
     finally:
@@ -376,9 +388,12 @@ def main() -> None:
         experiment.log_model(name=MODEL_NAME, file_or_folder=str(model_path))
 
         # --- Register to Model Registry -----------------------------------
+        # Sets initial status to Development + tag "example".
+        # Use the /promote-model skill to advance status (Staging/QA/Production).
         experiment.register_model(
             model_name=MODEL_NAME,
-            tags=["staging"],
+            status="Development",
+            tags=["example"],
             description="Stub model from the no-framework example.",
         )
     finally:

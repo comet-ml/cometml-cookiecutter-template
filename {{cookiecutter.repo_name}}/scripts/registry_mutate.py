@@ -1,12 +1,15 @@
-"""Mutate Comet Model Registry status and/or tags safely.
+"""Read and mutate Comet Model Registry status and tags safely.
 
 Invoked by the `promote-model` skill. Takes all inputs as separate argv entries
 so there is no shell/Python interpolation attack surface from user-supplied
 model names, versions, statuses, or tags.
 
 Examples:
-    # List versions and their current status/tags
+    # List versions with status, tags and source experiment
     python scripts/registry_mutate.py list --model iris-classifier
+
+    # Only the versions currently in Production
+    python scripts/registry_mutate.py list --model iris-classifier --status Production
 
     # Show the workspace's allowed status values
     python scripts/registry_mutate.py allowed-statuses
@@ -15,15 +18,12 @@ Examples:
     python scripts/registry_mutate.py set-status \\
         --model iris-classifier --version 1.2.0 --status Production
 
-    # Add a tag
-    python scripts/registry_mutate.py add-tag \\
-        --model iris-classifier --version 1.2.0 --tag release-2026-05
+    # Add / remove a tag
+    python scripts/registry_mutate.py add-tag --model iris-classifier --version 1.2.0 --tag canary
+    python scripts/registry_mutate.py remove-tag --model iris-classifier --version 1.2.0 \\
+        --tag canary
 
-    # Remove a tag
-    python scripts/registry_mutate.py remove-tag \\
-        --model iris-classifier --version 1.2.0 --tag canary
-
-API reference: https://www.comet.com/docs/v2/api-and-sdk/python-sdk/reference/API/
+API reference: https://www.comet.com/docs/v2/api-and-sdk/python-sdk/reference/Model/
 """
 from __future__ import annotations
 
@@ -68,29 +68,31 @@ def _workspace(api: API) -> str:
 def _get_model(model_name: str):
     api = _api()
     ws = _workspace(api)
-    model = api.get_model(workspace=ws, model_name=model_name)
-    if model is None:
+    try:
+        return api.get_model(workspace=ws, model_name=model_name)
+    except Exception as exc:  # the SDK raises rather than returning None
         sys.exit(
-            f"Model '{model_name}' not found in workspace '{ws}'. "
+            f"Model '{model_name}' not found in workspace '{ws}' ({exc}). "
             f"List with: python scripts/registry_mutate.py list-models"
         )
-    return model
 
 
 def cmd_list(args: argparse.Namespace) -> None:
-    """List versions of a registered model with their status and tags."""
+    """List versions of a registered model with status, tags and source experiment."""
     model = _get_model(args.model)
-    versions = model.find_versions()
     rows = []
-    for v in versions:
+    for v in model.find_versions(status=args.status):
         try:
             details = model.get_details(version=v)
-            status = details.get("status") or "None"
-            tags = details.get("tags") or []
+            row = {
+                "version": v,
+                "status": details.get("status") or "None",
+                "tags": details.get("tags") or [],
+                "experimentKey": details.get("experimentKey"),
+            }
         except Exception as exc:
-            status = f"<error: {exc}>"
-            tags = []
-        rows.append({"version": v, "status": status, "tags": tags})
+            row = {"version": v, "status": f"<error: {exc}>", "tags": [], "experimentKey": None}
+        rows.append(row)
     print(json.dumps(rows, indent=2))
 
 
@@ -105,17 +107,7 @@ def cmd_allowed_statuses(args: argparse.Namespace) -> None:
     """Print the workspace's allowed status values for the registry."""
     api = _api()
     ws = _workspace(api)
-    try:
-        allowed = api.model_registry_allowed_status_values(workspace=ws)
-    except AttributeError:
-        # Method name varies across SDK versions; fall back to Comet's standard set.
-        allowed = ["None", "Development", "Staging", "QA", "Production"]
-        print(
-            "WARNING: api.model_registry_allowed_status_values not available; "
-            "printing Comet's standard defaults.",
-            file=sys.stderr,
-        )
-    print(json.dumps(allowed, indent=2))
+    print(json.dumps(api.model_registry_allowed_status_values(workspace=ws), indent=2))
 
 
 def cmd_set_status(args: argparse.Namespace) -> None:
@@ -139,12 +131,13 @@ def cmd_remove_tag(args: argparse.Namespace) -> None:
     print(f"OK: {args.model} {args.version} -tag '{args.tag}'")
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p_list = sub.add_parser("list", help="List versions of a model")
     p_list.add_argument("--model", required=True)
+    p_list.add_argument("--status", help="only versions with this status")
     p_list.set_defaults(func=cmd_list)
 
     p_lmodels = sub.add_parser("list-models", help="List registered models")
@@ -153,25 +146,21 @@ def main() -> None:
     p_statuses = sub.add_parser("allowed-statuses", help="Show allowed status values")
     p_statuses.set_defaults(func=cmd_allowed_statuses)
 
-    p_status = sub.add_parser("set-status", help="Set status on a version")
-    p_status.add_argument("--model", required=True)
-    p_status.add_argument("--version", required=True)
-    p_status.add_argument("--status", required=True)
-    p_status.set_defaults(func=cmd_set_status)
+    for name, func, help_text in (
+        ("set-status", cmd_set_status, "Set status on a version"),
+        ("add-tag", cmd_add_tag, "Add a tag to a version"),
+        ("remove-tag", cmd_remove_tag, "Remove a tag from a version"),
+    ):
+        p = sub.add_parser(name, help=help_text)
+        p.add_argument("--model", required=True)
+        p.add_argument("--version", required=True)
+        p.add_argument("--status" if name == "set-status" else "--tag", required=True)
+        p.set_defaults(func=func)
+    return parser
 
-    p_add = sub.add_parser("add-tag", help="Add a tag to a version")
-    p_add.add_argument("--model", required=True)
-    p_add.add_argument("--version", required=True)
-    p_add.add_argument("--tag", required=True)
-    p_add.set_defaults(func=cmd_add_tag)
 
-    p_rm = sub.add_parser("remove-tag", help="Remove a tag from a version")
-    p_rm.add_argument("--model", required=True)
-    p_rm.add_argument("--version", required=True)
-    p_rm.add_argument("--tag", required=True)
-    p_rm.set_defaults(func=cmd_remove_tag)
-
-    args = parser.parse_args()
+def main() -> None:
+    args = build_parser().parse_args()
     args.func(args)
 
 

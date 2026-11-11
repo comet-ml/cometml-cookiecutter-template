@@ -1,126 +1,87 @@
 ---
 name: compare-runs
-description: Pull 2+ Comet experiments via the Comet MCP server (or `comet_ml.API` as fallback) and render a side-by-side markdown table of metrics and hyperparameters. Highlights the winning value per metric row. Use when the user asks to "compare", "diff", "which run won", or "baseline vs new".
+description: Side-by-side table of metrics and hyperparameters for 2+ Comet experiments, from ids, a tag, a metric query or latest=N, via the Comet MCP server with a comet_ml.API fallback. Highlights the best value per metric. Use when the user asks to "compare", "diff", "which run won", "baseline vs new" or "candidate vs production".
+argument-hint: "<id id ...> | tag=<tag> | latest=<N> | <metric><op><value>"
 ---
 
 # Compare Runs
 
-Side-by-side comparison of N experiments. Surfaces metric deltas + hyperparameter differences so the user can pick a winner or spot the variable that mattered.
-
-## When to run
-
-- "Compare run X to run Y" / "diff these experiments".
-- "Which baseline beat which?" — pass the tag (e.g. `baseline`) or a list of IDs.
-- Before promotion: confirm the candidate beats the current production model.
+Depends on: Comet MCP server (`mcp__comet-mcp__*`, needs `COMET_API_KEY` / `COMET_WORKSPACE` exported
+in the shell), `.env` for `COMET_WORKSPACE` / `COMET_PROJECT_NAME`; for "vs production",
+`scripts/registry_mutate.py list --status Production` gives the source `experimentKey`.
 
 ## Inputs
 
-Accept any of:
-
-- A list of experiment IDs: `[id1, id2, ...]`.
-- A tag query: `tag=baseline` or `tag=arch=resnet50`.
-- A project + N-most-recent: `latest=5`.
-
-Minimum 2 experiments. Maximum 8 (table becomes unreadable beyond that — warn the user and ask which to drop).
+Any of: a list of experiment ids; `tag=<tag>`; `latest=<N>`; a metric query such as `val_accuracy>0.95`.
+At least 2 runs. Above 8, use `experiment_spreadsheet` and summarize the CSV instead of a table.
 
 ## Procedure
 
-### 1. Resolve experiment list
+### 1. Resolve the runs
 
-- **IDs**: use as-is.
-- **Tag query**: MCP tool `list_experiments` filtered by tag (post-filter the results if the MCP tool doesn't accept a tag arg).
-- **`latest=N`**: MCP `list_experiments`, sort by created-at, take top N.
+Always pass `workspace=` and `project_name=` from `.env`.
 
-### 2. Fetch per experiment
+| Input | Tool |
+|-------|------|
+| `latest=N` | `list_experiments(workspace, project_name, page_size=N, sort_by="startTime", sort_order="desc")` |
+| `tag=x` | `find_tagged_experiments(tag="x", workspace, project_name)` |
+| `metric>v` | `query_experiments(name="val_accuracy", comparison=">", value=0.95, workspace, project_name)` |
+| "vs production" | `uv run python scripts/registry_mutate.py list --model <name> --status Production` -> `experimentKey` |
 
-MCP tools (snake_case, NOT `comet-mcp__list-experiments` style):
+### 2. Fetch per run
 
-| MCP tool | Purpose |
-|----------|---------|
-| `list_experiments` | List experiments in a project |
-| `get_experiment_details` | Metadata, tags, URL |
-| `get_experiment_metric_data` | All logged metric values + steps |
-| `get_experiment_parameters` | Hyperparameters |
+`get_experiment_summary(experiment_id)` (final/best metric values), `get_experiment_parameters`,
+`get_experiment_details` (name, tags, URL). Independent calls; issue them together. For curves, not just
+final values: `get_experiment_metric_data(experiment_ids=[...], metric_names=["val_accuracy"])`.
 
-For each experiment, call all three of `get_experiment_details`, `get_experiment_metric_data`, `get_experiment_parameters`. Fan out — the queries are independent.
-
-### 3. SDK fallback (if MCP tool fails)
+### 3. SDK fallback (tell the user MCP was unavailable)
 
 ```bash
-uv run python -c "
+uv run python - <<'EOF'
 from comet_ml import API
 from {{ cookiecutter.module_name }} import config
+
 api = API()
-for eid in ['$ID1', '$ID2']:
-    exp = api.get_experiment(eid)
-    print('---')
-    print('id:', exp.id)
-    print('url:', exp.url)
-    print('tags:', exp.get_tags())
-    print('metrics:', exp.get_metrics())
-    print('params:', exp.get_parameters_summary())
-"
+for key in ["<id1>", "<id2>"]:
+    exp = api.get_experiment_by_key(key)
+    print(exp.name, exp.url, exp.get_tags())
+    print({m["name"]: m["valueCurrent"] for m in exp.get_metrics_summary()})
+    print({p["name"]: p["valueCurrent"] for p in exp.get_parameters_summary()})
+# tag / latest without MCP:
+# api.get_experiments(config.COMET_WORKSPACE, config.COMET_PROJECT_NAME, page=1, page_size=5,
+#                     sort_by="startTime", sort_order="desc")
+EOF
 ```
 
-For tag-based discovery via SDK:
+### 4. Render
 
-```bash
-uv run python -c "
-from comet_ml import API
-from {{ cookiecutter.module_name }} import config
-api = API()
-exps = api.get_experiments(workspace=config.COMET_WORKSPACE, project_name=config.COMET_PROJECT_NAME)
-matches = [e for e in exps if 'baseline' in e.get_tags()]
-for e in matches: print(e.id, e.url)
-"
-```
-
-### 4. Determine metric union
-
-The set of metric names seen in any experiment. Order: alphabetical, but pin `train_accuracy`, `test_accuracy`, `loss` to the top in that order if present.
-
-### 5. Render markdown
+Metric rows: `val_accuracy`, `train_accuracy`, `train_loss` first, then the rest alphabetically. Best =
+max for accuracy-like names, min for loss/error-like; anything else gets no highlight. Delta column only
+for exactly two runs. Metrics present in only some runs show `-` elsewhere; the gap is information.
 
 ```markdown
-### Comparison: <N> experiments
+### 2 runs
 
-| Experiment | URL | Tags |
-|------------|-----|------|
-| <name1> (<short_id1>) | <url> | baseline |
-| <name2> (<short_id2>) | <url> | candidate |
+| Run | Tags | URL |
+|-----|------|-----|
+| demo-iris-classifier-20261111-1430 (a1b2c3) | example, framework=sklearn | <url> |
+| demo-iris-classifier-20261110-0915 (d4e5f6) | example, framework=sklearn | <url> |
 
-#### Metrics
+| Metric | a1b2c3 | d4e5f6 | delta |
+|--------|--------|--------|-------|
+| val_accuracy | **0.967** | 0.933 | +0.034 |
+| train_loss | 0.21 | **0.18** | +0.03 |
 
-| Metric | <short_id1> | <short_id2> | Δ |
-|--------|-------------|-------------|---|
-| test_accuracy | 0.93 | **0.95** ✅ | +0.02 |
-| loss          | **0.41** ✅ | 0.45 | +0.04 |
-
-#### Hyperparameter diff
-
-| Param | <short_id1> | <short_id2> |
-|-------|-------------|-------------|
-| learning_rate | 0.01 | **0.001** |
-| max_iter      | 200  | 200 |
+| Param | a1b2c3 | d4e5f6 |
+|-------|--------|--------|
+| learning_rate | **0.1** | 0.01 |
+| epochs | 20 | 20 |
 ```
 
-- "Best" cell: max for accuracy-style metrics, min for loss/error-style. If ambiguous (custom metric name), don't auto-pick — print without ✅.
-- Δ column only when N=2. For N>2, skip Δ and just bold the winners.
-
-### 6. Summary line
-
-At the bottom: "Run X wins on K/M metrics; consider it for promotion" — only if a clear winner emerges.
+End with one line: which run leads on how many metrics, and whether the hyperparameter diff explains it.
 
 ## Anti-patterns
 
-- Don't promote based on this skill — call out the winner but let the user run `/evaluate-run` + `/promote-model` explicitly.
-- Don't compare runs from different projects without flagging it loudly. Cross-project comparison usually means different data / different metric semantics.
-- Don't hide metrics that appear in only one experiment. Show them with `—` for the others — the asymmetry itself is signal.
-- Don't silently swallow an MCP tool-not-found error. Fall back to the SDK and tell the user MCP was unavailable.
-
-## Cross-references
-
-- Logging discipline: `.claude/rules/comet-em-best-practices.md` — runs are only comparable if they log the same metric names and hyperparameter shape.
-- `evaluate-run` — single-experiment threshold check.
-- `promote-model` — once a winner emerges and passes evaluation.
-- Comet API reference: <https://www.comet.com/docs/v2/api-and-sdk/python-sdk/reference/API/>.
+- Comparing runs from different projects without saying so.
+- Calling `get_experiment_metric_data` without `metric_names` (required) when summaries are enough.
+- Promoting from here; hand off to `/evaluate-run` and `/promote-model`.

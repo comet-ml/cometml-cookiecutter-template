@@ -1,121 +1,81 @@
 ---
 name: evaluate-run
-description: Query a single Comet experiment via the Comet MCP server (or `comet_ml.API` as a fallback), fetch its metrics and parameters, and compare against thresholds (inline or from `thresholds.yaml`). Reports pass/fail per metric with a markdown table. Use when the user asks to "evaluate", "gate", or "check" a specific run before promotion.
+description: Check one Comet experiment against thresholds.yaml (or inline thresholds) using the Comet MCP server, with a comet_ml.API fallback. Reports pass/fail per metric with the final values. Use when the user asks to "evaluate", "gate", "check" or "does it pass" for a specific run or "the latest run", and as the gate inside /promote-model.
+argument-hint: "<experiment-id | latest> [metric: \">=0.9\" ...]"
 ---
 
 # Evaluate Run
 
-Pull a single experiment's metrics from Comet and compare against thresholds. Outputs a pass/fail report that gates the next workflow step (typically `promote-model`).
-
-## When to run
-
-- After `run-training` completes, before deciding whether to promote.
-- When a user wants to verify a historical run still meets quality bars.
-- As an automated gate inside `promote-model`.
+Depends on: Comet MCP server (`mcp__comet-mcp__*`, needs `COMET_API_KEY` / `COMET_WORKSPACE` exported
+in the shell), `thresholds.yaml`, `.env` for `COMET_WORKSPACE` / `COMET_PROJECT_NAME`.
 
 ## Inputs
 
-- **`experiment_id`** (required) — the Comet experiment ID. If the user says "the latest run", discover it.
-- **`thresholds`** — optional. Two sources, checked in order:
-  1. User provides inline: `{"test_accuracy": ">=0.85", "loss": "<=0.5"}`.
-  2. `thresholds.yaml` in project root, shape:
-     ```yaml
-     test_accuracy: ">=0.85"
-     loss: "<=0.5"
-     ```
-  If neither, skip pass/fail — just print metrics summary.
+- **experiment**: an experiment id/key, or `latest`.
+- **thresholds**: inline (`val_accuracy: ">=0.9"`) or, by default, `thresholds.yaml` at the project
+  root. `make train` applies the same file, so a PASS here means the run would have registered.
+  "Value" is the metric's **final** value; say so in the report. Best values are available from the
+  same summary call if the user asks.
 
 ## Procedure
 
-### 1. Resolve experiment
+### 1. Resolve the experiment
 
-- If `experiment_id` given: use it.
-- If user said "latest": use the **Comet MCP** tool `list_experiments` for `${COMET_WORKSPACE}/${COMET_PROJECT_NAME}` and take the most recent.
+`latest`: `list_experiments(workspace=<COMET_WORKSPACE>, project_name=<COMET_PROJECT_NAME>,
+page_size=1, sort_by="startTime", sort_order="desc")`. Always pass both; without them the server
+queries the account default workspace and project `general`.
 
-### 2. Fetch via MCP
+### 2. Fetch
 
-The Comet MCP server exposes these tools (note: snake_case, NOT `comet-mcp__list-experiments` style):
+- `get_experiment_summary(experiment_id)`: final and best value per metric.
+- `get_experiment_parameters(experiment_id)` and `get_experiment_details(experiment_id)`: hyperparameters,
+  tags, name, URL.
 
-| MCP tool | Purpose |
-|----------|---------|
-| `list_experiments` | List experiments in a project |
-| `get_experiment_details` | Metadata, tags, URL for one experiment |
-| `get_experiment_metric_data` | All logged metric values + steps |
-| `get_experiment_parameters` | Hyperparameters |
-| `list_projects` | Projects in the workspace |
-
-Call `get_experiment_details`, `get_experiment_metric_data`, and `get_experiment_parameters` for the target experiment ID.
-
-### 3. SDK fallback (if MCP tool fails)
-
-If the MCP server is unavailable or the tool name has shifted, fall back to `comet_ml.API` directly:
+### 3. SDK fallback (MCP unavailable or a tool errors; tell the user)
 
 ```bash
-uv run python -c "
-from comet_ml import API
-api = API()
-exp = api.get_experiment('$EXP_ID')
-print('metrics:', exp.get_metrics())
-print('params:', exp.get_parameters_summary())
-print('tags:', exp.get_tags())
-print('url:', exp.url)
-"
-```
-
-For "latest" discovery via SDK:
-
-```bash
-uv run python -c "
+uv run python - <<'EOF'
 from comet_ml import API
 from {{ cookiecutter.module_name }} import config
+
 api = API()
-exps = api.get_experiments(workspace=config.COMET_WORKSPACE, project_name=config.COMET_PROJECT_NAME)
-exps.sort(key=lambda e: e.start_server_timestamp, reverse=True)
-print(exps[0].id, exps[0].url)
-"
+exp = api.get_experiment_by_key("<experiment-key>")   # or, for latest:
+# exp = api.get_experiments(config.COMET_WORKSPACE, config.COMET_PROJECT_NAME,
+#                           page=1, page_size=1, sort_by="startTime", sort_order="desc")[0]
+print(exp.name, exp.url, exp.get_tags())
+for m in exp.get_metrics_summary():
+    print(m["name"], "final", m["valueCurrent"], "max", m["valueMax"], "min", m["valueMin"])
+print(exp.get_parameters_summary())
+EOF
 ```
 
-### 4. Apply thresholds (if provided)
+### 4. Apply thresholds
 
-For each declared metric:
+Parse `<op><number>` with op in `>=`, `<=`, `>`, `<`, `==`; evaluate against the final value. A metric
+named in the thresholds but absent from the run is a FAIL with value `missing`. Metrics not named in the
+thresholds are reported without a verdict.
 
-- Parse the comparison (`>=`, `<=`, `>`, `<`, `==`).
-- Evaluate `actual <op> threshold`.
-- Collect pass/fail per metric.
-
-### 5. Render markdown table
+### 5. Report
 
 ```markdown
-### Experiment <id> — <PASS|FAIL>
+### demo-iris-classifier-20261111-1430 (a1b2c3) -- PASS
 
-**URL:** <experiment_url>
-**Tags:** example, framework=sklearn
+URL: <url>   Tags: example, framework=sklearn   Dataset: iris-dataset:1.0.0
 
-| Metric | Value | Threshold | Result |
+| Metric | Final | Threshold | Result |
 |--------|-------|-----------|--------|
-| test_accuracy | 0.93 | >=0.85 | ✅ |
-| loss          | 0.41 | <=0.5  | ✅ |
+| val_accuracy | 0.967 | >=0.9 | pass |
+| train_accuracy | 0.983 | - | - |
 
-**Hyperparameters:**
-- max_iter: 200
-- solver: lbfgs
+Hyperparameters: epochs=20, learning_rate=0.1, alpha=0.001
 ```
 
-### 6. Hand off
-
-- PASS → tell user they can `/promote-model <model_name>` referencing this experiment ID.
-- FAIL → list failing metrics; suggest checking the run details, adjusting hyperparams, or retraining.
+PASS: point to `/promote-model <model-name> <experiment-id>`. FAIL: list the failing metrics and suggest
+`/compare-runs` against a passing run or a `/run-sweep`.
 
 ## Anti-patterns
 
-- Don't fabricate thresholds. If none are provided, just summarize.
-- Don't promote a model from this skill — that's `promote-model`'s job (irreversible-ish).
-- Don't fetch metrics by parsing local logs. The MCP server (or `comet_ml.API`) is the source of truth — local logs may be stale.
-- Don't treat "metric exists but not in threshold list" as failing. Only declared thresholds count.
-- Don't silently swallow an MCP tool-not-found error. Fall back to the SDK and tell the user that MCP was unavailable.
-
-## Cross-references
-
-- Logging discipline (what gets logged so we can evaluate it): `.claude/rules/comet-em-best-practices.md`.
-- SDK configuration reference (for timeouts when MCP queries are slow): <https://www.comet.com/docs/v2/guides/experiment-management/configure-sdk/>.
-- Comet API reference: <https://www.comet.com/docs/v2/api-and-sdk/python-sdk/reference/API/>.
+- Fabricating thresholds when none exist: summarize instead.
+- Reading metrics from local logs; Comet is the source of truth.
+- Promoting from here. That is `/promote-model`.
+- Swallowing an MCP error silently.

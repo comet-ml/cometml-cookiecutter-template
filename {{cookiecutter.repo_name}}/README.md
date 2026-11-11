@@ -8,96 +8,118 @@ Python {{ cookiecutter.python_version }} · uv · Comet EM · {{ cookiecutter.fr
 
 ```bash
 uv sync
-cp .env.example .env       # fill in COMET_API_KEY and COMET_WORKSPACE
-set -a && source .env && set +a   # export the variables into your shell session
-make train                 # runs the example experiment
+cp .env.example .env               # fill in COMET_API_KEY and COMET_WORKSPACE
+make train                         # builds the dataset, then runs one experiment
 ```
 
-See your experiment at `https://www.comet.com/<your-workspace>/{{ cookiecutter.repo_name }}` — replace `<your-workspace>` with your Comet workspace slug (the value of `COMET_WORKSPACE` in your `.env`).
+The run appears at `https://www.comet.com/<COMET_WORKSPACE>/{{ cookiecutter.repo_name }}`, named
+`{{ cookiecutter.repo_name }}-iris-classifier-<YYYYMMDD>-<HHmm>`. When `val_accuracy` clears
+`thresholds.yaml`, the run also registers `iris-classifier` in the Model Registry.
 
-## Claude Code + Comet MCP setup
+## Lifecycle
 
-This project ships a `.mcp.json` at the repo root. When you launch [Claude Code](https://docs.claude.com/en/docs/claude-code) from inside this directory, it auto-loads the [Comet MCP server](https://www.comet.com/docs/v2/api-and-sdk/mcp-server/overview/), which lets the AI query your experiments, metrics, projects, and registry directly.
+| Step | Command | What happens in Comet |
+|------|---------|-----------------------|
+| Data | `make data` | `data/processed/iris-*.csv` logged once as Artifact `iris-dataset` |
+| Train | `make train` | one experiment: per-epoch metrics, confusion matrix, logged model, dataset lineage; registers the next patch version when the gate passes (`ARGS="--register"` forces it) |
+| Tune | `make sweep` | a `comet_ml.Optimizer` bayes search, one tagged experiment per trial |
+| Promote | `/promote-model` or `uv run python scripts/registry_mutate.py set-status ...` | status Development -> Staging -> QA -> Production |
+| Deploy | webhook -> `.github/workflows/deploy-model.yml` | re-checks the status, downloads the version, runs your deploy step |
+| Consume | `make predict` | loads the Production version and predicts on the test split |
 
-One-time install:
+`make <target> ARGS="..."` passes flags to the script, e.g. `make train ARGS="--epochs 30 --learning-rate 0.05"`.
 
-```bash
-uv tool install comet-mcp     # or rely on `uvx` to fetch on demand
-```
+Offline: `COMET_START_ONLINE=false make train` writes `.cometml-runs/<key>.zip` for a later
+`comet upload`. Offline runs skip Artifacts and registration.
 
-Every Claude Code session needs your `.env` values exported into the shell *before* launch (the MCP server reads `COMET_API_KEY` / `COMET_WORKSPACE` / `COMET_URL_OVERRIDE` from the environment, not from `.env` directly):
+## CI/CD: deploy on Model Registry status
+
+`.github/workflows/deploy-model.yml` runs when a version's status changes in the registry.
+
+1. Repository settings: secret `COMET_API_KEY` (use a [Service Account](https://www.comet.com/docs/v2/guides/comet-ui/admin-dashboard/service-accounts/) key),
+   variable `COMET_WORKSPACE`.
+2. GitHub: create a fine-grained token with **Contents: Read and write** on this repo (required to
+   trigger a workflow this way).
+3. Comet: open the registered model -> **Webhooks** -> **Create Webhook**:
+   - URL `https://api.github.com/repos/<org>/<repo>/dispatches`
+   - Secret `Bearer <your GitHub token>` (sent verbatim as the `Authorization` header)
+   - Trigger **Model status changed** (fires after a change is approved)
+   - **GitHub Actions Integration** on
+4. **Test Webhook** should succeed. It sends a `TEST` event, so it does not start a deploy.
+
+The workflow deploys only for the statuses listed in its `if:` (edit them to your registry's names),
+re-checks the status in Comet so a stale event cannot deploy, fetches the version with `make predict`,
+and ends in a placeholder deploy step. `.github/workflows/ci.yml` runs lint and the credential-free
+tests on every push and pull request.
+Docs: [webhooks](https://www.comet.com/docs/v2/guides/model-registry/webhooks/),
+[status and approvals](https://www.comet.com/docs/v2/guides/model-registry/model-approval/).
+
+## Claude Code + Comet MCP
+
+`.mcp.json` registers the [Comet MCP server](https://www.comet.com/docs/v2/api-and-sdk/mcp-server/overview/)
+and `.claude/settings.json` pre-approves it, so Claude Code can read experiments, metrics and projects.
+The server does **not** read or write the Model Registry; `scripts/registry_mutate.py` does.
+
+The server reads `COMET_API_KEY` / `COMET_WORKSPACE` from the shell, not from `.env`:
 
 ```bash
 set -a && source .env && set +a
-claude    # launches Claude Code, which auto-loads .mcp.json
+claude
 ```
 
-For a permanent setup, use [direnv](https://direnv.net/) — add `.envrc` containing `dotenv` and the env loads automatically on `cd`.
-
-## Project layout
-
-<!-- AUTO-GENERATED:tree -->
-```
-{{ cookiecutter.repo_name }}/
-├── .claude/                       # Claude Code rules + skills
-│   ├── rules/                     # Comet EM best practices, CHANGELOG discipline, notebook hygiene
-│   └── skills/                    # run-training, evaluate-run, compare-runs, promote-model, update-{readme,makefile,changelog}
-├── .mcp.json                      # Auto-loads Comet MCP server in Claude Code
-├── data/
-│   ├── raw/                       # Immutable, as received
-│   ├── interim/                   # Intermediate transformations
-│   ├── processed/                 # Canonical, ready for modeling
-│   └── external/                  # Third-party sources
-├── models/                        # Trained model artifacts
-├── notebooks/                     # Exploration only — production code lives in src/
-├── reports/
-│   └── figures/
-├── src/
-│   └── {{ cookiecutter.module_name }}/
-│       ├── config.py              # Loads .env, exposes COMET_* settings
-│       ├── dataset.py             # Data loading
-│       └── train.py               # Example experiment (logs to Comet)
-├── tests/
-├── AGENT.md                       # Briefing for AI coding assistants
-├── CHANGELOG.md
-├── CONTRIBUTING.md
-├── Makefile
-├── pyproject.toml
-└── .env.example
-```
-<!-- /AUTO-GENERATED:tree -->
-
-## Common tasks
-
-| Task | Command |
-|------|---------|
-| Install runtime deps | `make install` |
-| Install dev deps (ruff, pytest) | `make install-dev` |
-| Format code | `make format` |
-| Lint | `make lint` |
-| Run tests | `make test` |
-| Run example experiment | `make train` |
+[direnv](https://direnv.net/) with an `.envrc` containing `dotenv` makes that permanent.
+`COMET_URL_OVERRIDE` is optional and defaults to `{{ cookiecutter.comet_url_override }}`.
 
 ## Working with AI coding assistants
 
-This project ships with `AGENT.md` and a `.claude/` folder containing rules and skills for [Claude Code](https://docs.claude.com/en/docs/claude-code). The rules cover:
+`AGENTS.md` (imported by `CLAUDE.md`) briefs the agent; `.claude/rules/` holds the Comet EM, changelog
+and notebook rules, scoped to the files they govern; `.claude/skills/` holds the workflows:
 
-- Comet EM best practices (what to log, tagging conventions, credentials handling)
-- CHANGELOG discipline (update `## [Unreleased]` before every commit)
-- Notebook hygiene (clear outputs, no secrets, push logic into `src/`)
+| Skill | Use it for |
+|-------|-----------|
+| `/run-training` | run `make train` and report name, URL, metrics, registered version |
+| `/evaluate-run <id>` | check a run against `thresholds.yaml` |
+| `/compare-runs <ids \| tag=x \| latest=N>` | metric and hyperparameter table across runs |
+| `/debug-run <id>` | why a run failed: output, curves, code snapshot, assets |
+| `/run-sweep` | run `make sweep` and summarise the trials |
+| `/promote-model <name>` | change a version's status or tags, with confirmation |
+| `/update-changelog` | draft `[Unreleased]` entries from the diff |
 
-Comet-EM lifecycle skills (use the auto-loaded MCP server):
+### Using these skills in an existing repo
 
-- `run-training` — execute `make train`, surface the experiment URL + final metrics
-- `evaluate-run` — pull a run's metrics via MCP, compare against thresholds, pass/fail
-- `compare-runs` — side-by-side metric diff across 2+ runs via MCP
-- `promote-model` — set a registry version's status (None/Development/Staging/QA/Production) and/or tags, with confirmation
+Copy what you need rather than the whole scaffold:
 
-Repo upkeep skills:
+1. `.claude/skills/<name>/` for each skill, `.claude/settings.json` (MCP pre-approval, `.env` denied)
+   and `.mcp.json`.
+2. `scripts/registry_mutate.py` and `thresholds.yaml` for `/promote-model` and `/evaluate-run`.
+3. Each `SKILL.md` starts with a `Depends on:` line naming the commands and files it expects
+   (`make train`, `thresholds.yaml`, `.env`); point those at your own entry points.
+4. `config.experiment_name()` is four lines; copy it into your training package to get the naming
+   convention everywhere.
 
-- `update-readme` — regenerate the auto-generated README sections
-- `update-makefile` — keep targets in sync with installed tooling
-- `update-changelog` — propose `[Unreleased]` lines from `git diff`
+## Project layout
+
+```
+{{ cookiecutter.repo_name }}/
+├── .claude/               # settings.json, rules/, skills/
+├── .github/workflows/     # ci.yml, deploy-model.yml
+├── .mcp.json              # Comet MCP server for Claude Code
+├── data/{raw,interim,processed,external}/
+├── models/
+├── notebooks/             # exploration only; logic goes to src/
+├── reports/figures/
+├── scripts/registry_mutate.py
+├── src/{{ cookiecutter.module_name }}/
+│   ├── config.py          # .env, experiment_name(), thresholds
+│   ├── dataset.py         # make data
+│   ├── train.py           # make train
+│   ├── sweep.py           # make sweep
+│   └── predict.py         # make predict
+├── tests/                 # credential-free
+├── thresholds.yaml        # promotion gate
+├── AGENTS.md / CLAUDE.md  # agent briefing
+├── CHANGELOG.md / CONTRIBUTING.md / Makefile / pyproject.toml / .env.example
+```
 
 ## Contributing
 

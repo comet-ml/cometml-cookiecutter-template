@@ -1,0 +1,4 @@
+# Promotion gates. `make train` registers a model version only when every listed
+# metric passes; /evaluate-run checks a finished experiment against the same file.
+# Format: <metric>: "<op><number>" with op in >=, <=, >, <, ==
+val_accuracy: ">=0.9"

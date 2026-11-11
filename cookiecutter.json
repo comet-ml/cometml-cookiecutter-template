@@ -8,5 +8,6 @@
   "python_version": ["3.12", "3.10", "3.11", "3.13"],
   "framework": ["sklearn", "xgboost", "pytorch", "tensorflow", "none"],
   "comet_url_override": "https://www.comet.com/clientlib/",
-  "open_source_license": ["MIT", "Apache-2.0", "Proprietary", "None"]
+  "open_source_license": ["MIT", "Apache-2.0", "Proprietary", "None"],
+  "_copy_without_render": [".github/workflows/*"]
 }

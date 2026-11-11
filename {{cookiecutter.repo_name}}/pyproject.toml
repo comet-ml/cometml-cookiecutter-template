@@ -8,14 +8,20 @@ authors = [
     {name = "{{ cookiecutter.author_name }}", email = "{{ cookiecutter.author_email }}"},
 ]
 dependencies = [
-    "comet-ml>=3.49.0",
+    "comet-ml>=3.55.0",
     "python-dotenv>=1.0.0",
+    "pyyaml>=6.0",
+    "pandas>=2.0.0",
+    "scikit-learn>=1.4.0",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
     "ruff>=0.6.0",
     "pytest>=8.0.0",
+    "pre-commit>=3.0.0",
+    "nbstripout>=0.7.0",
+    "ipykernel>=6.0.0",
 ]
 
 [build-system]

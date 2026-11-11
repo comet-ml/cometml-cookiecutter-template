@@ -6,8 +6,8 @@ argument-hint: "<id id ...> | tag=<tag> | latest=<N> | <metric><op><value>"
 
 # Compare Runs
 
-Depends on: Comet MCP server (`mcp__comet-mcp__*`, needs `COMET_API_KEY` / `COMET_WORKSPACE` exported
-in the shell), `.env` for `COMET_WORKSPACE` / `COMET_PROJECT_NAME`; for "vs production",
+Depends on: Comet MCP server (setup, workspace/project rule, tool table, SDK fallback: `AGENTS.md` >
+"Comet MCP server").
 `scripts/registry_mutate.py list --status Production` gives the source `experimentKey`.
 
 ## Inputs
@@ -19,8 +19,6 @@ At least 2 runs. Above 8, use `experiment_spreadsheet` and summarize the CSV ins
 
 ### 1. Resolve the runs
 
-Always pass `workspace=` and `project_name=` from `.env`.
-
 | Input | Tool |
 |-------|------|
 | `latest=N` | `list_experiments(workspace, project_name, page_size=N, sort_by="startTime", sort_order="desc")` |
@@ -30,29 +28,13 @@ Always pass `workspace=` and `project_name=` from `.env`.
 
 ### 2. Fetch per run
 
-`get_experiment_summary(experiment_id)` (final/best values; "best" is the max, wrong for losses), `get_experiment_parameters`,
+`get_experiment_summary(experiment_id)` (final/best values; "best" = max), `get_experiment_parameters`,
 `get_experiment_details` (name, tags, URL). Independent calls; issue them together. For curves, not just
 final values: `get_experiment_metric_data(experiment_ids=[...], metric_names=["val_accuracy"])`.
 
-### 3. SDK fallback (tell the user MCP was unavailable)
+### 3. SDK fallback
 
-```bash
-uv run python - <<'EOF'
-from comet_ml import API
-from {{ cookiecutter.module_name }} import config
-
-api = API()
-ws = config.COMET_WORKSPACE or api.get_default_workspace()
-for key in ["<id1>", "<id2>"]:
-    exp = api.get_experiment_by_key(key)
-    print(exp.name, exp.url, exp.get_tags())
-    print({m["name"]: m["valueCurrent"] for m in exp.get_metrics_summary()})
-    print({p["name"]: p["valueCurrent"] for p in exp.get_parameters_summary()})
-# tag / latest without MCP:
-# api.get_experiments(ws, config.COMET_PROJECT_NAME, page=1, page_size=5,
-#                     sort_by="startTime", sort_order="desc")
-EOF
-```
+If a tool errors, use the snippet in `AGENTS.md` > "Comet MCP server" and tell the user MCP was unavailable.
 
 ### 4. Render
 

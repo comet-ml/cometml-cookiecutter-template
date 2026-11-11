@@ -13,6 +13,13 @@ dependencies = [
     "pyyaml>=6.0",
     "pandas>=2.0.0",
     "scikit-learn>=1.4.0",
+{%- if cookiecutter.framework == "xgboost" %}
+    "xgboost>=2.0.0",
+{%- elif cookiecutter.framework == "pytorch" %}
+    "torch>=2.2.0",
+{%- elif cookiecutter.framework == "tensorflow" %}
+    "tensorflow>=2.16.0",
+{%- endif %}
 ]
 
 [dependency-groups]
@@ -40,3 +47,14 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+{%- if cookiecutter.framework == "pytorch" %}
+
+# CUDA wheels are several GB; the example runs on CPU.
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+{%- endif %}

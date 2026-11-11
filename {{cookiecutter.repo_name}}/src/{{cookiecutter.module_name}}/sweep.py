@@ -39,7 +39,7 @@ def main(argv=None) -> None:
         project_name=config.COMET_PROJECT_NAME, auto_metric_logging=False
     ):
         experiment.set_name(config.experiment_name(f"{train.MODEL_NAME}-sweep"))
-        experiment.add_tags(["sweep", f"sweep={optimizer.id}", "framework={{ cookiecutter.framework }}"])
+        experiment.add_tags(["sweep", f"sweep={optimizer.id}", f"framework={train.FRAMEWORK}"])
         tuned = {k: experiment.get_parameter(k) for k in OPTIMIZER_CONFIG["parameters"]}
         params = {**train.DEFAULT_PARAMS, **tuned}
         try:

@@ -53,15 +53,15 @@ cookiecutter gh:comet-ml/cometml-cookiecutter-template
 
 ## What happens after generation
 
-The post-generation hook appends the framework deps to `pyproject.toml` (CPU-only torch index for
-`pytorch`), writes the chosen `LICENSE` (or removes it for `Proprietary` / `None`) and runs
+Framework deps (and the CPU-only torch index for `pytorch`) are templated in `pyproject.toml`. The
+post-generation hook writes the chosen `LICENSE` (or removes it for `Proprietary` / `None`) and runs
 `git init` + `git add .` without committing, so you inspect first. Then:
 
 ```bash
 cd <repo_name>
 uv sync
 cp .env.example .env       # fill in COMET_API_KEY / COMET_WORKSPACE
-make train                 # builds the dataset, then runs one experiment
+make train                 # runs one experiment (builds the CSVs if missing)
 ```
 
 The generated `README.md` covers the lifecycle, the deploy webhook setup, the MCP server and how to
@@ -80,5 +80,4 @@ uv sync && make lint && make test
 
 `.github/workflows/ci.yml` does the same for every framework on each push and pull request.
 `.github/workflows/*` in the template are copied without rendering (`_copy_without_render`), so GitHub
-`${{ ... }}` expressions survive; everything else goes through Jinja, so a literal `{{` in template
-code needs `{% raw %}`.
+`${{ ... }}` expressions survive; everything else goes through Jinja.

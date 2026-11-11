@@ -6,8 +6,8 @@ argument-hint: "<experiment-id | latest> [metric: \">=0.9\" ...]"
 
 # Evaluate Run
 
-Depends on: Comet MCP server (`mcp__comet-mcp__*`, needs `COMET_API_KEY` / `COMET_WORKSPACE` exported
-in the shell), `thresholds.yaml`, `.env` for `COMET_WORKSPACE` / `COMET_PROJECT_NAME`.
+Depends on: Comet MCP server (setup, workspace/project rule, tool table, SDK fallback: `AGENTS.md` >
+"Comet MCP server").
 
 ## Inputs
 
@@ -22,33 +22,17 @@ in the shell), `thresholds.yaml`, `.env` for `COMET_WORKSPACE` / `COMET_PROJECT_
 ### 1. Resolve the experiment
 
 `latest`: `list_experiments(workspace=<COMET_WORKSPACE>, project_name=<COMET_PROJECT_NAME>,
-page_size=1, sort_by="startTime", sort_order="desc")`. Always pass both; without them the server
-queries the account default workspace and project `general`.
+page_size=1, sort_by="startTime", sort_order="desc")`.
 
 ### 2. Fetch
 
-- `get_experiment_summary(experiment_id)`: final and best value per metric ("best" is the max; for losses read the SDK fallback's `valueMin`).
+- `get_experiment_summary(experiment_id)`: final and best value per metric ("best" = max; see AGENTS.md).
 - `get_experiment_parameters(experiment_id)` and `get_experiment_details(experiment_id)`: hyperparameters,
   tags, name, URL.
 
-### 3. SDK fallback (MCP unavailable or a tool errors; tell the user)
+### 3. SDK fallback
 
-```bash
-uv run python - <<'EOF'
-from comet_ml import API
-from {{ cookiecutter.module_name }} import config
-
-api = API()
-ws = config.COMET_WORKSPACE or api.get_default_workspace()
-exp = api.get_experiment_by_key("<experiment-key>")   # or, for latest:
-# exp = api.get_experiments(ws, config.COMET_PROJECT_NAME,
-#                           page=1, page_size=1, sort_by="startTime", sort_order="desc")[0]
-print(exp.name, exp.url, exp.get_tags())
-for m in exp.get_metrics_summary():
-    print(m["name"], "final", m["valueCurrent"], "max", m["valueMax"], "min", m["valueMin"])
-print(exp.get_parameters_summary())
-EOF
-```
+If a tool errors, use the snippet in `AGENTS.md` > "Comet MCP server" and tell the user MCP was unavailable.
 
 ### 4. Apply thresholds
 

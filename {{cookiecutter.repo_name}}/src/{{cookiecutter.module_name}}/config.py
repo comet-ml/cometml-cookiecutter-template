@@ -1,4 +1,4 @@
-"""Configuration: loads .env, exposes Comet settings, naming and promotion thresholds.
+"""Configuration: loads .env, exposes Comet settings, naming and the promotion gate.
 
 Import COMET_* values from here rather than reading os.environ directly so that
 secrets stay scoped to one module and tests can monkeypatch in one place.
@@ -43,25 +43,16 @@ _OPS = {">=": operator.ge, "<=": operator.le, ">": operator.gt, "<": operator.lt
 _THRESHOLD_RE = re.compile(r"^\s*(>=|<=|==|>|<)\s*(-?\d+(?:\.\d+)?)\s*$")
 
 
-def thresholds(path: Path = THRESHOLDS_PATH) -> dict[str, str]:
-    """Metric -> condition string (e.g. `">=0.9"`) from thresholds.yaml; empty if absent."""
+def failing_thresholds(metrics: dict[str, float], path: Path = THRESHOLDS_PATH) -> list[str]:
+    """Metrics of thresholds.yaml (`<metric>: "<op><number>"`) that fail; a missing metric fails."""
     if not path.exists():
-        return {}
-    return {k: str(v) for k, v in (yaml.safe_load(path.read_text()) or {}).items()}
-
-
-def _passes(condition: str, value: float, metric: str) -> bool:
-    match = _THRESHOLD_RE.match(condition)
-    if not match:
-        raise ValueError(f"thresholds.yaml: cannot parse {metric}: {condition!r}")
-    op, bound = match.groups()
-    return _OPS[op](value, float(bound))
-
-
-def gate_passes(metrics: dict[str, float], path: Path = THRESHOLDS_PATH) -> list[str]:
-    """Names of the thresholds.yaml metrics that fail (a missing metric fails); [] means go."""
-    return [
-        metric
-        for metric, condition in thresholds(path).items()
-        if metric not in metrics or not _passes(condition, metrics[metric], metric)
-    ]
+        return []
+    failing = []
+    for metric, condition in (yaml.safe_load(path.read_text()) or {}).items():
+        match = _THRESHOLD_RE.match(str(condition))
+        if not match:
+            raise ValueError(f"thresholds.yaml: cannot parse {metric}: {condition!r}")
+        op, bound = match.groups()
+        if metric not in metrics or not _OPS[op](metrics[metric], float(bound)):
+            failing.append(metric)
+    return failing

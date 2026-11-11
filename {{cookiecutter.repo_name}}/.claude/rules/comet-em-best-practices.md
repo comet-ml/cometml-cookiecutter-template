@@ -89,11 +89,14 @@ finally:
   raw features; a model that needs the training-time scaler recomputed elsewhere is not deployable.
   `comet_ml.integration.<framework>.log_model` helpers exist, but note the pytorch one saves a
   state_dict, not a module. A logged model lives inside one experiment.
-- Register only a run that cleared its gate: `experiment.register_model(name, version=, status=, tags=,
-  metadata=)`. `version` is **semver and required in practice**: it defaults to `1.0.0` and a duplicate
-  is rejected (logged at `end()`, not raised). `train.py` bumps the patch of the latest version; bump
-  minor for a retrain with new hyperparameters, major for new data or architecture.
-- `metadata=` carries provenance: dataset Artifact version, gate metric, git SHA.
+- Register only a run that cleared its gate, after `experiment.end()`, through the REST client:
+  `api.get_experiment_by_key(key).register_model(name, version=, status=, tags=, metadata=)`. It is
+  synchronous and raises when the backend rejects the version. (`experiment.register_model` is
+  fire-and-forget: a rejection is only logged at `end()`.) `version` is semver and required in
+  practice: it defaults to `1.0.0` and duplicates are rejected. `train.py` bumps the patch of the
+  latest version; bump minor for a retrain with new hyperparameters, major for new data or architecture.
+- `metadata=` carries provenance: dataset Artifact version and the final metrics. Comet already logs the
+  git SHA on the experiment; the registry version links to it through `experimentKey`.
 - **Status** is one value per version (`None`, `Development`, `Staging`, `QA`, `Production` by default;
   workspace-configurable, with an approval workflow). **Tags** are free-form and many. Deploy pipelines
   select by status; humans slice by tags. Comet does **not** demote the previous holder when you set a
@@ -107,26 +110,10 @@ finally:
 
 ## 6. Agents: the Comet MCP server
 
-`.mcp.json` registers `comet-mcp` and `.claude/settings.json` pre-approves it (tools appear as
-`mcp__comet-mcp__<tool>`). It needs `COMET_API_KEY` / `COMET_WORKSPACE` **in the shell environment**,
-not only in `.env` (`set -a && source .env && set +a`, or direnv).
-
-Always pass `workspace=` and `project_name=` from `.env`: with neither, the server queries the account's
-default workspace and project `general`.
-
-| Need | Tool |
-|------|------|
-| Latest runs | `list_experiments(workspace, project_name, page_size=N, sort_by="startTime", sort_order="desc")` |
-| Final and best metric values | `get_experiment_summary(experiment_id)` ("best" is the max, wrong for losses) |
-| Curves | `get_experiment_training_progress(experiment_id, metric_names)` / `get_experiment_metric_data(experiment_ids, metric_names, x_axis)` |
-| Hyperparameters, tags, URL | `get_experiment_parameters`, `get_experiment_details` |
-| Runs by tag / by metric | `find_tagged_experiments(tag, ...)`, `query_experiments(name, comparison, value, ...)` |
-| Many runs at once | `experiment_spreadsheet(workspace, project_name, experiment_keys)` (CSV) |
-| Why a run failed | `get_experiment_output(experiment_id)` (stdout/stderr), `get_experiment_code`, `get_experiment_assets` / `analyze_experiment_asset` |
-| Project overview | `list_projects`, `get_project_details`, `get_all_experiments_summary`, `get_project_tags`, `get_project_logged_item_names`, `validate_project`, `get_default_workspace`, `get_session_info` |
-
-The MCP server reads experiments only. No registry reads or writes, no experiment creation.
-When a tool errors, fall back to `comet_ml.API` (each skill carries a working snippet) and say so.
+Setup, the workspace/project rule, the tool table and the SDK fallback live in `AGENTS.md` (always
+loaded), section "Comet MCP server". Two things to remember here: the server reads experiments only
+(no registry access; that is `scripts/registry_mutate.py`), and every query names `workspace=` and
+`project_name=` from `.env`.
 
 ## 7. Offline runs
 

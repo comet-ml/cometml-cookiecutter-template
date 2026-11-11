@@ -1,74 +1,26 @@
 """Post-generation hook.
 
 Responsibilities:
-- Append framework-specific deps (and, for pytorch, a CPU-only wheel index) to pyproject.toml.
 - Drop the chosen LICENSE (or delete it for Proprietary / None).
 - Run `git init` + `git add .` (nothing is committed).
 - Print next-steps banner.
 
-The training code itself lives in src/<module>/train.py as a Jinja-templated file.
+Framework deps and the training code are Jinja-templated in pyproject.toml and src/<module>/train.py.
 """
 from __future__ import annotations
 
-import re
 import subprocess
 import sys
 from datetime import date
 from pathlib import Path
 from textwrap import dedent
 
-FRAMEWORK = "{{ cookiecutter.framework }}"
 LICENSE = "{{ cookiecutter.open_source_license }}"
 REPO_NAME = "{{ cookiecutter.repo_name }}"
 AUTHOR_NAME = "{{ cookiecutter.author_name }}"
 
 ROOT = Path.cwd()
-PYPROJECT_PATH = ROOT / "pyproject.toml"
 LICENSE_PATH = ROOT / "LICENSE"
-
-# scikit-learn + pandas are base deps (dataset.py uses them for every framework).
-FRAMEWORK_DEPS = {
-    "sklearn": [],
-    "xgboost": ["xgboost>=2.0.0"],
-    "pytorch": ["torch>=2.2.0"],
-    "tensorflow": ["tensorflow>=2.16.0"],
-    "none": [],
-}
-
-# CUDA wheels are several GB; the example runs on CPU.
-TORCH_CPU_INDEX = """
-[tool.uv.sources]
-torch = { index = "pytorch-cpu" }
-
-[[tool.uv.index]]
-name = "pytorch-cpu"
-url = "https://download.pytorch.org/whl/cpu"
-explicit = true
-"""
-
-_DEP_ANCHOR_RE = re.compile(r'^(?P<indent>[ \t]+)"python-dotenv[^"]*",[ \t]*\r?\n', re.MULTILINE)
-
-
-def append_deps() -> None:
-    """Insert framework deps into pyproject.toml right after the python-dotenv anchor."""
-    deps = FRAMEWORK_DEPS[FRAMEWORK]
-    text = PYPROJECT_PATH.read_text().replace("\r\n", "\n")
-    if deps:
-        match = _DEP_ANCHOR_RE.search(text)
-        if not match:
-            print(
-                f"WARNING: could not find python-dotenv dependency anchor in pyproject.toml; "
-                f"add these manually under [project].dependencies: {deps}",
-                file=sys.stderr,
-            )
-        else:
-            indent = match.group("indent")
-            insertion = "".join(f'{indent}"{d}",\n' for d in deps)
-            text = text[: match.end()] + insertion + text[match.end() :]
-    if FRAMEWORK == "pytorch":
-        text = text.rstrip("\n") + "\n" + TORCH_CPU_INDEX
-    PYPROJECT_PATH.write_text(text)
-
 
 # --- License ------------------------------------------------------------------
 
@@ -333,7 +285,6 @@ def banner() -> None:
 
 
 def main() -> None:
-    append_deps()
     write_license()
     git_init()
     banner()

@@ -9,7 +9,7 @@ Python {{ cookiecutter.python_version }} | uv | Comet EM | {{ cookiecutter.frame
 ```bash
 uv sync
 cp .env.example .env               # fill in COMET_API_KEY and COMET_WORKSPACE
-make train                         # builds the dataset, then runs one experiment
+make train                         # runs one experiment (builds the CSVs if missing)
 ```
 
 The run appears at `https://www.comet.com/<COMET_WORKSPACE>/{{ cookiecutter.repo_name }}`, named
@@ -24,7 +24,7 @@ The run appears at `https://www.comet.com/<COMET_WORKSPACE>/{{ cookiecutter.repo
 | Train | `make train` | one experiment: per-epoch metrics, confusion matrix, logged model, dataset lineage; registers the next patch version when every metric in `thresholds.yaml` passes (`ARGS="--register"` forces it) |
 | Tune | `make sweep` | a `comet_ml.Optimizer` bayes search, one tagged experiment per trial |
 | Promote | `/promote-model` or `uv run python scripts/registry_mutate.py set-status ...` | status Development -> Staging -> QA -> Production |
-| Deploy | webhook -> `.github/workflows/deploy-model.yml` | re-checks the status, downloads the version, runs your deploy step |
+| Deploy | webhook -> `.github/workflows/deploy-model.yml` | `make predict` verifies the status and fetches the version, then your deploy step |
 | Consume | `make predict` | loads the Production version and predicts on the test split |
 
 `make <target> ARGS="..."` passes flags to the script, e.g. `make train ARGS="--epochs 30 --learning-rate 0.05"`.
@@ -48,8 +48,8 @@ Offline: `COMET_START_ONLINE=false make train` writes `.cometml-runs/<key>.zip` 
 4. **Test Webhook** should succeed. It sends a `TEST` event, so it does not start a deploy.
 
 The workflow deploys only for the statuses listed in its `if:` (edit them to your registry's names),
-re-checks the status in Comet so a stale event cannot deploy, fetches the version with `make predict`,
-and ends in a placeholder deploy step. `.github/workflows/ci.yml` runs lint and the credential-free
+runs `make predict ARGS="--version <v> --status <s>"`, which verifies the version still has that status
+(so a stale event cannot deploy) and downloads it, and ends in a placeholder deploy step. `.github/workflows/ci.yml` runs lint and the credential-free
 tests on every push and pull request.
 Docs: [webhooks](https://www.comet.com/docs/v2/guides/model-registry/webhooks/),
 [status and approvals](https://www.comet.com/docs/v2/guides/model-registry/model-approval/).
@@ -57,33 +57,23 @@ Docs: [webhooks](https://www.comet.com/docs/v2/guides/model-registry/webhooks/),
 ## Claude Code + Comet MCP
 
 `.mcp.json` registers the [Comet MCP server](https://www.comet.com/docs/v2/api-and-sdk/mcp-server/overview/)
-and `.claude/settings.json` pre-approves it, so Claude Code can read experiments, metrics and projects.
-The server does **not** read or write the Model Registry; `scripts/registry_mutate.py` does.
-
-The server reads `COMET_API_KEY` / `COMET_WORKSPACE` from the shell, not from `.env`:
+(read-only: experiments, metrics, projects) and `.claude/settings.json` pre-approves it. The server
+reads `COMET_API_KEY` / `COMET_WORKSPACE` from the shell, not from `.env`, so launch Claude Code with:
 
 ```bash
 set -a && source .env && set +a
 claude
 ```
 
-[direnv](https://direnv.net/) with an `.envrc` containing `dotenv` makes that permanent.
-`COMET_URL_OVERRIDE` is optional and defaults to `{{ cookiecutter.comet_url_override }}`.
+[direnv](https://direnv.net/) with an `.envrc` containing `dotenv` makes that permanent. Details for the
+agent (tool table, workspace rule, SDK fallback) are in `AGENTS.md`.
 
 ## Working with AI coding assistants
 
-`AGENTS.md` (imported by `CLAUDE.md`) briefs the agent; `.claude/rules/` holds the Comet EM, changelog
-and notebook rules, scoped to the files they govern; `.claude/skills/` holds the workflows:
-
-| Skill | Use it for |
-|-------|-----------|
-| `/run-training` | run `make train` and report name, URL, metrics, registered version |
-| `/evaluate-run <id>` | check a run against `thresholds.yaml` |
-| `/compare-runs <ids \| tag=x \| latest=N>` | metric and hyperparameter table across runs |
-| `/debug-run <id>` | why a run failed: output, curves, code snapshot, assets |
-| `/run-sweep` | run `make sweep` and summarise the trials |
-| `/promote-model <name>` | change a version's status or tags, with confirmation |
-| `/update-changelog` | draft `[Unreleased]` entries from the diff |
+`AGENTS.md` (imported by `CLAUDE.md`) briefs the agent and lists the skills with their side effects;
+`.claude/rules/` holds the Comet EM, changelog and notebook rules, scoped to the files they govern;
+`.claude/skills/` holds the workflows (`run-training`, `evaluate-run`, `compare-runs`, `debug-run`,
+`run-sweep`, `promote-model`, `update-changelog`).
 
 ### Using these skills in an existing repo
 

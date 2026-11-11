@@ -25,7 +25,8 @@ through `/run-training`, which applies the threshold gate.
    ```
    The script prints `best val_accuracy=<v> experiment=<key>` and `sweep id: <id>` at the end.
 3. Summarise with MCP (pass `workspace=` and `project_name=` from `.env`):
-   `find_tagged_experiments(tag="sweep", ...)` for the trial keys, then
+   `find_tagged_experiments(tag="sweep=<sweep id>", ...)` for this sweep's trial keys (plain `sweep`
+   returns every past sweep), then
    `experiment_spreadsheet(workspace, project_name, experiment_keys=[...])` for a CSV of parameters and
    final metrics, or `get_experiment_summary` per trial when there are few.
 4. Report: a table of trials (`learning_rate`, `epochs`, `val_accuracy`), the best trial's name, key and

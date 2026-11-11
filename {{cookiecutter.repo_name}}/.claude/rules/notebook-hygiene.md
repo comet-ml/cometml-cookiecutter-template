@@ -32,7 +32,7 @@ A bad notebook re-implements `load_data`, hardcodes paths, or contains a full tr
 ## Outputs never reach git
 
 `.pre-commit-config.yaml` runs `nbstripout` on every commit; install the hooks once per clone with
-`uv run pre-commit install`. Manual fallback: `uv run jupyter nbconvert --clear-output --inplace notebooks/*.ipynb`.
+`uv run pre-commit install`. Manual fallback: `uv run nbstripout notebooks/*.ipynb`.
 
 ## No secrets in cells
 

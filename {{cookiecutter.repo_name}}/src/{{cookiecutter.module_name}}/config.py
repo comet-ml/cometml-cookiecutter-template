@@ -50,13 +50,18 @@ def thresholds(path: Path = THRESHOLDS_PATH) -> dict[str, str]:
     return {k: str(v) for k, v in (yaml.safe_load(path.read_text()) or {}).items()}
 
 
-def threshold_passes(metric: str, value: float, path: Path = THRESHOLDS_PATH) -> bool:
-    """True when `value` satisfies the metric's condition, or when none is defined for it."""
-    condition = thresholds(path).get(metric)
-    if condition is None:
-        return True
+def _passes(condition: str, value: float, metric: str) -> bool:
     match = _THRESHOLD_RE.match(condition)
     if not match:
         raise ValueError(f"thresholds.yaml: cannot parse {metric}: {condition!r}")
     op, bound = match.groups()
     return _OPS[op](value, float(bound))
+
+
+def gate_passes(metrics: dict[str, float], path: Path = THRESHOLDS_PATH) -> list[str]:
+    """Names of the thresholds.yaml metrics that fail (a missing metric fails); [] means go."""
+    return [
+        metric
+        for metric, condition in thresholds(path).items()
+        if metric not in metrics or not _passes(condition, metrics[metric], metric)
+    ]

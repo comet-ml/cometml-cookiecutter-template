@@ -34,7 +34,7 @@ def build(data_dir: Path = config.DATA_DIR) -> tuple[Path, Path]:
 
 
 def log_artifact(experiment: comet_ml.CometExperiment, paths: tuple[Path, Path]) -> None:
-    """Log the CSVs as a new version of the dataset Artifact (Comet skips unchanged content)."""
+    """Log the CSVs as a new version of the dataset Artifact."""
     artifact = comet_ml.Artifact(name=DATASET_NAME, artifact_type="dataset")
     for path in paths:
         artifact.add(str(path))

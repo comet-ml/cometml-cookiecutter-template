@@ -30,8 +30,8 @@ jobs:
       - name: Render
         run: |
           uvx cookiecutter . --no-input --output-dir out project_name="Test Project" framework="$FRAMEWORK"
-          ! grep -l 'cookiecutter' out/test-project/.github/workflows/*.yml
-          grep -q 'COMET_URL_OVERRIDE:-https://www.comet.com/clientlib/' out/test-project/.mcp.json
+          if grep -l 'cookiecutter' out/test-project/.github/workflows/*.yml; then exit 1; fi
+          grep -q 'COMET_URL_OVERRIDE:-https://www.comet.com/clientlib/}"' out/test-project/.mcp.json
       - name: Lint and test the generated project
         working-directory: out/test-project
         run: |

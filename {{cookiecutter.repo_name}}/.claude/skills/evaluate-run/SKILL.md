@@ -27,7 +27,7 @@ queries the account default workspace and project `general`.
 
 ### 2. Fetch
 
-- `get_experiment_summary(experiment_id)`: final and best value per metric.
+- `get_experiment_summary(experiment_id)`: final and best value per metric ("best" is the max; for losses read the SDK fallback's `valueMin`).
 - `get_experiment_parameters(experiment_id)` and `get_experiment_details(experiment_id)`: hyperparameters,
   tags, name, URL.
 
@@ -39,8 +39,9 @@ from comet_ml import API
 from {{ cookiecutter.module_name }} import config
 
 api = API()
+ws = config.COMET_WORKSPACE or api.get_default_workspace()
 exp = api.get_experiment_by_key("<experiment-key>")   # or, for latest:
-# exp = api.get_experiments(config.COMET_WORKSPACE, config.COMET_PROJECT_NAME,
+# exp = api.get_experiments(ws, config.COMET_PROJECT_NAME,
 #                           page=1, page_size=1, sort_by="startTime", sort_order="desc")[0]
 print(exp.name, exp.url, exp.get_tags())
 for m in exp.get_metrics_summary():

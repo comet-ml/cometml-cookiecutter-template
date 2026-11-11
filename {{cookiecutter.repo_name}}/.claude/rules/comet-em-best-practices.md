@@ -17,7 +17,7 @@ that is wrong rather than working around it.
 
 - Read `COMET_API_KEY`, `COMET_WORKSPACE`, `COMET_PROJECT_NAME`, `COMET_URL_OVERRIDE` through
   `src/{{ cookiecutter.module_name }}/config.py` (it loads `.env`). Never hardcode a key, never print one.
-- `.env` is gitignored and denied to the agent in `.claude/settings.json`. Share `.env.example` instead.
+- `.env` is gitignored and the Read tool is denied on it in `.claude/settings.json`. Share `.env.example` instead.
 - Every SDK setting is an env var (`COMET_*`), a `.comet.config` entry, or a `comet_ml.login(...)` argument.
   Env var wins. Reference: <https://www.comet.com/docs/v2/guides/experiment-management/configure-sdk/>.
   Common ones: `COMET_TIMEOUT_CLEANING` / `COMET_TIMEOUT_UPLOAD` (slow `end()`), `COMET_AUTO_LOG_*`
@@ -61,8 +61,8 @@ finally:
 
 ## 3. Datasets: one Artifact, consumed by version
 
-- `make data` writes `data/processed/iris-*.csv` and logs them **once** as Artifact `iris-dataset`.
-  Comet versions it; unchanged files are not re-uploaded.
+- `make data` writes `data/processed/iris-*.csv` and logs them as a new version of Artifact
+  `iris-dataset`. Run it when the data changes, not before every training run.
 - Training reads the CSVs and records lineage with `experiment.get_artifact("iris-dataset")`
   (`dataset.record_lineage`). It never re-logs the dataset. The version lands in registry metadata.
 - Data that lives in S3/GCS stays there: register a remote Artifact (`artifact.add_remote(uri)`) so Comet
@@ -84,9 +84,11 @@ finally:
 
 ## 5. Models: log, then register, then consume
 
-- Log the model to the experiment with the framework integration when one exists
-  (`comet_ml.integration.sklearn.log_model`, `comet_ml.integration.pytorch.log_model`), otherwise save
-  to `models/` and `experiment.log_model(name, path)`. A logged model lives inside one experiment.
+- Save the model **with its preprocessing** (`train.save_model`: sklearn `Pipeline`, a scaling layer or
+  buffers, or stats in the file) and `experiment.log_model(name, path)`. A registry version must run on
+  raw features; a model that needs the training-time scaler recomputed elsewhere is not deployable.
+  `comet_ml.integration.<framework>.log_model` helpers exist, but note the pytorch one saves a
+  state_dict, not a module. A logged model lives inside one experiment.
 - Register only a run that cleared its gate: `experiment.register_model(name, version=, status=, tags=,
   metadata=)`. `version` is **semver and required in practice**: it defaults to `1.0.0` and a duplicate
   is rejected (logged at `end()`, not raised). `train.py` bumps the patch of the latest version; bump
@@ -100,8 +102,8 @@ finally:
   ad-hoc `python -c`. Reading the registry (versions, status, tags) also goes through that script: the
   MCP server has no registry tools.
 - Consume by status, never by local path: `api.get_model(ws, name).find_versions(status="Production")[0]`
-  then `.download(version, output_folder=...)` or `comet_ml.integration.<fw>.load_model("registry://ws/name:version")`.
-  `predict.py` is the reference; the deploy workflow does the same from a status-change webhook.
+  then `.download(version, output_folder=...)` and `predict.load_from_dir`. `predict.py` is the
+  reference; the deploy workflow does the same from a status-change webhook.
 
 ## 6. Agents: the Comet MCP server
 
@@ -115,7 +117,7 @@ default workspace and project `general`.
 | Need | Tool |
 |------|------|
 | Latest runs | `list_experiments(workspace, project_name, page_size=N, sort_by="startTime", sort_order="desc")` |
-| Final and best metric values | `get_experiment_summary(experiment_id)` |
+| Final and best metric values | `get_experiment_summary(experiment_id)` ("best" is the max, wrong for losses) |
 | Curves | `get_experiment_training_progress(experiment_id, metric_names)` / `get_experiment_metric_data(experiment_ids, metric_names, x_axis)` |
 | Hyperparameters, tags, URL | `get_experiment_parameters`, `get_experiment_details` |
 | Runs by tag / by metric | `find_tagged_experiments(tag, ...)`, `query_experiments(name, comparison, value, ...)` |

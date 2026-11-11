@@ -23,8 +23,10 @@ concurrency:
 
 jobs:
   deploy:
-    # Only statuses you deploy on (match your registry status names); anything else is skipped.
-    if: contains(fromJSON('["Staging", "QA", "Production"]'), github.event.client_payload.status)
+    # Only this model and the statuses you deploy on (match your registry's names); else skipped.
+    if: >-
+      github.event.client_payload.registryModelName == 'iris-classifier' &&
+      contains(fromJSON('["Staging", "QA", "Production"]'), github.event.client_payload.status)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -46,6 +48,7 @@ jobs:
       - name: Re-check the status in Comet
         # A stale or replayed event can never deploy a version whose status has since changed.
         run: |
+          [[ "$MODEL_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]] || { echo "bad version: $MODEL_VERSION"; exit 1; }
           uv run python - <<'EOF'
           import os
           from comet_ml import API
@@ -62,5 +65,5 @@ jobs:
           make predict ARGS="--version $MODEL_VERSION --status $MODEL_STATUS"
 
       - name: Deploy
-        # Replace with your deploy step; the model files are under models/registry/<version>/.
+        # Replace with your deploy step. The downloaded version is under models/registry/<version>/.
         run: echo "deploy $MODEL_NAME $MODEL_VERSION to the $MODEL_STATUS environment"

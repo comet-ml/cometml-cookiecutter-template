@@ -10,16 +10,16 @@ Propose `[Unreleased]` lines for `CHANGELOG.md` based on the current branch's di
 ## When to run
 
 - Before every commit that touches `src/` (see `.claude/rules/changelog-discipline.md`).
-- Before opening a PR — make sure `[Unreleased]` reflects everything on the branch.
-- On release — when collapsing `[Unreleased]` into a versioned section.
+- Before opening a PR - make sure `[Unreleased]` reflects everything on the branch.
+- On release - when collapsing `[Unreleased]` into a versioned section.
 
 ## Procedure
 
 1. **Identify the base**: `git merge-base HEAD main` (or `master`). Fall back to `origin/main` if local `main` doesn't exist.
 
 2. **Diff**:
-   - `git diff --name-status <base>..HEAD` — file-level changes.
-   - `git log <base>..HEAD --pretty=format:"%h %s"` — commits since base.
+   - `git diff --name-status <base>..HEAD` - file-level changes.
+   - `git log <base>..HEAD --pretty=format:"%h %s"` - commits since base.
 
 3. **Classify** each change into Keep-a-Changelog sections:
 
@@ -41,7 +41,7 @@ Propose `[Unreleased]` lines for `CHANGELOG.md` based on the current branch's di
    - Locate the `## [Unreleased]` block.
    - Insert each line under its matching subsection.
    - Create subsections in order: Added, Changed, Deprecated, Removed, Fixed, Security.
-   - Don't overwrite existing entries — append.
+   - Don't overwrite existing entries - append.
 
 6. **Show the diff** to the user:
    ```
@@ -66,7 +66,7 @@ When the user says "cut version X.Y.Z":
 
 ## Anti-patterns
 
-- Auto-staging the file — user must review wording.
+- Auto-staging the file - user must review wording.
 - Vague lines like "Updated code" or "Various improvements." Be specific.
 - Dropping lines for "minor" changes that touched `src/`. If it changed behavior, it goes in the log.
-- Re-classifying user-authored entries — leave them alone unless asked.
+- Re-classifying user-authored entries - leave them alone unless asked.

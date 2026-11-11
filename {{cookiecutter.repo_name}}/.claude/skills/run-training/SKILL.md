@@ -16,8 +16,8 @@ only when `thresholds.yaml` passes (or `--register` is given).
 
 ## Pre-flight
 
-1. `.env` must exist with a non-empty `COMET_API_KEY`. Check without printing it:
-   `[ -n "$(grep -E '^COMET_API_KEY=.+' .env)" ] && echo set || echo missing`.
+1. A key must be available: `COMET_API_KEY` in `.env` or the shell, or `api_key` in `~/.comet.config`.
+   Check without printing it: `grep -qE '^COMET_API_KEY=.+' .env 2>/dev/null || [ -n "$COMET_API_KEY" ] || grep -q api_key ~/.comet.config 2>/dev/null && echo set || echo missing`.
    If missing: tell the user to `cp .env.example .env` and fill it in; stop.
 2. Training reads `.env` itself (`config.py` loads it). The shell environment only matters for the
    MCP server, so do not ask the user to export anything here.
@@ -39,15 +39,19 @@ make train ARGS="$ARGUMENTS" > >(tee "$LOG") 2>&1; echo "TRAIN_EXIT_CODE=$?"
 Print the last 30 lines of `$LOG`, name the exception, and **stop**. No retry (a retry creates a second
 experiment), no editing `train.py`. For a run that reached Comet, `/debug-run <id>` reads its output.
 
-### 3. On success, extract from the log
+### 3. On success, read the `summary:` line
 
-- **Experiment name and URL**: the line `COMET INFO: Experiment is live on comet.com <url>`; the name is
-  `{project}-iris-classifier-{YYYYMMDD}-{HHmm}` (also in the summary block at the end).
-- **Final metrics**: the last `train_accuracy` / `val_accuracy` (and `train_loss` where logged) in the
-  Comet summary block.
-- **Dataset lineage**: `Artifact 'iris-dataset:<version>' download` or the
-  `dataset lineage not recorded` warning (then suggest `make data`).
-- **Registration**: `registered iris-classifier <version>` or `not registered: val_accuracy=... fails >=0.9`.
+`train.py` prints one line at the end, the only thing to parse:
+
+```
+summary: name=demo-iris-classifier-20261111-1430 dataset=iris-dataset:1.0.0 train_accuracy=0.9833 val_accuracy=0.9667 registered=1.0.3
+```
+
+- `name`: the experiment name. The URL is on the `COMET INFO: Experiment is live on comet.com <url>` line.
+- `dataset`: the Artifact version used (`local` when `make data` has not run online).
+- The metrics are **final** values (the Comet summary block above it prints min/max, not final).
+- `registered`: the new version, `none` (gate failed; the `not registered: ...` line says which
+  metric), or `FAILED` (the SDK rejected the registration and the script exited non-zero).
 
 ### 4. Summary
 
@@ -55,7 +59,7 @@ experiment), no editing `train.py`. For a run that reached Comet, `/debug-run <i
 ### Training run complete
 
 - **Experiment:** demo-iris-classifier-20261111-1430 (<URL>)
-- **Final metrics:** train_accuracy=0.98, val_accuracy=0.97
+- **Final metrics:** train_accuracy=0.983, val_accuracy=0.967
 - **Dataset:** iris-dataset:1.0.0
 - **Registry:** iris-classifier 1.0.3 created, status Development
 ```

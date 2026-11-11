@@ -5,7 +5,7 @@ other agents (Codex, Cursor, Aider) read it directly.
 
 ## Project
 
-**{{ cookiecutter.project_name }}** — {{ cookiecutter.description }}
+**{{ cookiecutter.project_name }}** - {{ cookiecutter.description }}
 
 ## Stack
 
@@ -19,7 +19,7 @@ other agents (Codex, Cursor, Aider) read it directly.
 
 ## Layout
 
-```
+```text
 src/{{ cookiecutter.module_name }}/
   config.py        # .env, experiment_name(), thresholds.yaml
   dataset.py       # make data: iris CSVs + the iris-dataset Artifact
@@ -57,7 +57,7 @@ workflow runs to fetch and smoke-test the version. The full rules live in
 
 ## Credentials
 
-- `.env` is gitignored and denied to the agent in `.claude/settings.json`. Never hardcode or print
+- `.env` is gitignored and the Read tool is denied on it in `.claude/settings.json`. Never hardcode or print
   `COMET_API_KEY`. `comet_ml.start()` and `comet_ml.API()` read it from the environment.
 - CI uses a Comet **Service Account** key as the `COMET_API_KEY` repository secret.
 

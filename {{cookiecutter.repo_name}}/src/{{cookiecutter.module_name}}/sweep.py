@@ -2,7 +2,7 @@
 
 Every trial is a normal Comet experiment in the same project, tagged `sweep`, so the project
 view, the parallel coordinates chart and /compare-runs all work on the results. The sweep
-never registers models: pick the best trial, then `make train --learning-rate ...` to register.
+never registers models: pick the best trial, then `make train ARGS="--learning-rate ..."`.
 
 Docs: https://www.comet.com/docs/v2/guides/optimizer/quickstart/
 """
@@ -39,7 +39,7 @@ def main(argv=None) -> None:
         project_name=config.COMET_PROJECT_NAME, auto_metric_logging=False
     ):
         experiment.set_name(config.experiment_name(f"{train.MODEL_NAME}-sweep"))
-        experiment.add_tags(["sweep", "framework={{ cookiecutter.framework }}"])
+        experiment.add_tags(["sweep", f"sweep={optimizer.id}", "framework={{ cookiecutter.framework }}"])
         tuned = {k: experiment.get_parameter(k) for k in OPTIMIZER_CONFIG["parameters"]}
         params = {**train.DEFAULT_PARAMS, **tuned}
         try:

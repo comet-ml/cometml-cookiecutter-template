@@ -24,9 +24,9 @@ optimizer.id                                  # resume later with Optimizer(opti
 - `get_experiments(**kwargs)` forwards its arguments to the experiment constructor, so
   `ExperimentConfig` fields work there.
 - Each trial is an ordinary experiment: tags, names and the MCP tools all apply. `sweep.py` tags trials
-  `sweep` and names them with `config.experiment_name("<model>-sweep")`.
-- Parallel trials: run `make sweep` on several machines with `Optimizer(<id>)`; the server hands out
-  distinct parameter sets.
+  `sweep` and `sweep=<id>` and names them with `config.experiment_name("<model>-sweep")`.
+- Parallel trials: `Optimizer(<id>)` on several machines shares one search (`sweep.py` would need an
+  `--optimizer-id` flag to do that; it creates a fresh sweep each run).
 - `comet optimize` (CLI) wraps the same thing for scripts that read parameters from the environment.
 
 ## Offline mode

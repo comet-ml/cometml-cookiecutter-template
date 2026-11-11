@@ -1,5 +1,2 @@
 # Rendered projects from local testing / CI
 out/
-
-# Agent scratch
-.superpowers/

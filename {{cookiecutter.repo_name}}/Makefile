@@ -28,8 +28,12 @@ lint:
 test:
 	uv run pytest
 
-data data/processed/iris-train.csv:
+data:
 	uv run python -m $(MODULE).dataset $(ARGS)
+
+# Prerequisite for train/sweep/predict: build the CSVs without ARGS and without Comet.
+data/processed/iris-train.csv:
+	uv run python -m $(MODULE).dataset --no-artifact
 
 train: data/processed/iris-train.csv
 	uv run python -m $(MODULE).train $(ARGS)

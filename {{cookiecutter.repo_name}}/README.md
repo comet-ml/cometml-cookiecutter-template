@@ -2,7 +2,7 @@
 
 {{ cookiecutter.description }}
 
-Python {{ cookiecutter.python_version }} · uv · Comet EM · {{ cookiecutter.framework }}
+Python {{ cookiecutter.python_version }} | uv | Comet EM | {{ cookiecutter.framework }}
 
 ## Quickstart
 
@@ -21,7 +21,7 @@ The run appears at `https://www.comet.com/<COMET_WORKSPACE>/{{ cookiecutter.repo
 | Step | Command | What happens in Comet |
 |------|---------|-----------------------|
 | Data | `make data` | `data/processed/iris-*.csv` logged once as Artifact `iris-dataset` |
-| Train | `make train` | one experiment: per-epoch metrics, confusion matrix, logged model, dataset lineage; registers the next patch version when the gate passes (`ARGS="--register"` forces it) |
+| Train | `make train` | one experiment: per-epoch metrics, confusion matrix, logged model, dataset lineage; registers the next patch version when every metric in `thresholds.yaml` passes (`ARGS="--register"` forces it) |
 | Tune | `make sweep` | a `comet_ml.Optimizer` bayes search, one tagged experiment per trial |
 | Promote | `/promote-model` or `uv run python scripts/registry_mutate.py set-status ...` | status Development -> Staging -> QA -> Production |
 | Deploy | webhook -> `.github/workflows/deploy-model.yml` | re-checks the status, downloads the version, runs your deploy step |
@@ -99,26 +99,26 @@ Copy what you need rather than the whole scaffold:
 
 ## Project layout
 
-```
+```text
 {{ cookiecutter.repo_name }}/
-├── .claude/               # settings.json, rules/, skills/
-├── .github/workflows/     # ci.yml, deploy-model.yml
-├── .mcp.json              # Comet MCP server for Claude Code
-├── data/{raw,interim,processed,external}/
-├── models/
-├── notebooks/             # exploration only; logic goes to src/
-├── reports/figures/
-├── scripts/registry_mutate.py
-├── src/{{ cookiecutter.module_name }}/
-│   ├── config.py          # .env, experiment_name(), thresholds
-│   ├── dataset.py         # make data
-│   ├── train.py           # make train
-│   ├── sweep.py           # make sweep
-│   └── predict.py         # make predict
-├── tests/                 # credential-free
-├── thresholds.yaml        # promotion gate
-├── AGENTS.md / CLAUDE.md  # agent briefing
-├── CHANGELOG.md / CONTRIBUTING.md / Makefile / pyproject.toml / .env.example
+|-- .claude/               # settings.json, rules/, skills/
+|-- .github/workflows/     # ci.yml, deploy-model.yml
+|-- .mcp.json              # Comet MCP server for Claude Code
+|-- data/{raw,interim,processed,external}/
+|-- models/
+|-- notebooks/             # exploration only; logic goes to src/
+|-- reports/figures/
+|-- scripts/registry_mutate.py
+|-- src/{{ cookiecutter.module_name }}/
+|   |-- config.py          # .env, experiment_name(), thresholds
+|   |-- dataset.py         # make data
+|   |-- train.py           # make train
+|   |-- sweep.py           # make sweep
+|   `-- predict.py         # make predict
+|-- tests/                 # credential-free
+|-- thresholds.yaml        # promotion gate
+|-- AGENTS.md / CLAUDE.md  # agent briefing
+`-- CHANGELOG.md / CONTRIBUTING.md / Makefile / pyproject.toml / .env.example
 ```
 
 ## Contributing

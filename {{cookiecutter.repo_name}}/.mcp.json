@@ -2,7 +2,7 @@
   "mcpServers": {
     "comet-mcp": {
       "command": "uvx",
-      "args": ["comet-mcp"],
+      "args": ["comet-mcp>=1.4,<2"],
       "env": {
         "COMET_API_KEY": "${COMET_API_KEY}",
         "COMET_WORKSPACE": "${COMET_WORKSPACE}",

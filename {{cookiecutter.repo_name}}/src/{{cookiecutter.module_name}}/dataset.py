@@ -6,6 +6,7 @@ version it used, so the dataset is uploaded once per change rather than on every
 """
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 import comet_ml
@@ -51,9 +52,14 @@ def record_lineage(experiment: comet_ml.CometExperiment) -> str:
         return "local"
 
 
-def main() -> None:
+def main(argv=None) -> None:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--no-artifact", action="store_true", help="only write the CSVs")
+    args = parser.parse_args(argv)
     paths = build()
     print(f"wrote {paths[0]} and {paths[1]}")
+    if args.no_artifact:
+        return
     experiment = comet_ml.start(
         project_name=config.COMET_PROJECT_NAME,
         experiment_config=comet_ml.ExperimentConfig(

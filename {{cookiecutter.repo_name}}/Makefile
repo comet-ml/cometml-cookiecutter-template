@@ -1,6 +1,7 @@
 .PHONY: help install format lint test data train sweep predict clean
 
 MODULE := {{ cookiecutter.module_name }}
+ARGS ?=
 
 help:
 	@echo "Available targets:"
@@ -10,6 +11,7 @@ help:
 	@echo "  test     pytest (credential-free)"
 	@echo "  data     build data/processed/iris-*.csv and log the dataset Artifact"
 	@echo "  train    run one experiment; registers a version when thresholds.yaml passes"
+	@echo "           (pass flags with ARGS, e.g. make train ARGS=\"--register --epochs 30\")"
 	@echo "  sweep    run a Comet Optimizer sweep over train()"
 	@echo "  predict  load the Production registry version and predict on test rows"
 	@echo "  clean    remove caches and build artifacts"
@@ -27,16 +29,16 @@ test:
 	uv run pytest
 
 data data/processed/iris-train.csv:
-	uv run python -m $(MODULE).dataset
+	uv run python -m $(MODULE).dataset $(ARGS)
 
 train: data/processed/iris-train.csv
-	uv run python -m $(MODULE).train
+	uv run python -m $(MODULE).train $(ARGS)
 
 sweep: data/processed/iris-train.csv
-	uv run python -m $(MODULE).sweep
+	uv run python -m $(MODULE).sweep $(ARGS)
 
 predict: data/processed/iris-train.csv
-	uv run python -m $(MODULE).predict
+	uv run python -m $(MODULE).predict $(ARGS)
 
 clean:
 	find . -type d -name __pycache__ -exec rm -rf {} +

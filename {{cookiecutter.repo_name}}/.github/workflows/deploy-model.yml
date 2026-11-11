@@ -1,0 +1,66 @@
+# Deploy a registered model when its status changes in the Comet Model Registry.
+#
+# Trigger: a Model Registry webhook with "GitHub Actions Integration" enabled, URL
+# https://api.github.com/repos/<org>/<repo>/dispatches and Secret "Bearer <fine-grained
+# token with Contents: Read and write>". Comet sends repository_dispatch events whose
+# event_type is the trigger name and whose client_payload carries registryModelName,
+# version, status and workspaceName. See README.md, "CI/CD: deploy on Model Registry status".
+#
+# Required repository settings: secret COMET_API_KEY (a Service Account key), variable
+# COMET_WORKSPACE. This file is copied into the project without templating.
+name: Deploy model on Comet status change
+
+on:
+  repository_dispatch:
+    types: [MODEL_STATUS_CHANGED]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.event.client_payload.registryModelName }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # Only statuses you deploy on (match your registry status names); anything else is skipped.
+    if: contains(fromJSON('["Staging", "QA", "Production"]'), github.event.client_payload.status)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      COMET_API_KEY: ${{ secrets.COMET_API_KEY }}
+      COMET_WORKSPACE: ${{ vars.COMET_WORKSPACE }}
+      MODEL_NAME: ${{ github.event.client_payload.registryModelName }}
+      MODEL_VERSION: ${{ github.event.client_payload.version }}
+      MODEL_STATUS: ${{ github.event.client_payload.status }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version-file: .python-version
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - run: uv sync
+
+      - name: Re-check the status in Comet
+        # A stale or replayed event can never deploy a version whose status has since changed.
+        run: |
+          uv run python - <<'EOF'
+          import os
+          from comet_ml import API
+
+          model = API().get_model(os.environ["COMET_WORKSPACE"], os.environ["MODEL_NAME"])
+          current = model.status(os.environ["MODEL_VERSION"])
+          if current != os.environ["MODEL_STATUS"]:
+              raise SystemExit(f"status is now {current!r}, not {os.environ['MODEL_STATUS']!r}")
+          EOF
+
+      - name: Download the version and smoke-test it
+        run: |
+          make data ARGS=--no-artifact
+          make predict ARGS="--version $MODEL_VERSION --status $MODEL_STATUS"
+
+      - name: Deploy
+        # Replace with your deploy step; the model files are under models/registry/<version>/.
+        run: echo "deploy $MODEL_NAME $MODEL_VERSION to the $MODEL_STATUS environment"

@@ -1,0 +1,16 @@
+{
+  "enabledMcpjsonServers": ["comet-mcp"],
+  "permissions": {
+    "allow": [
+      "mcp__comet-mcp",
+      "Bash(make lint)",
+      "Bash(make test)",
+      "Bash(make format)",
+      "Bash(uv run python scripts/registry_mutate.py list*)",
+      "Bash(uv run python scripts/registry_mutate.py allowed-statuses)"
+    ],
+    "deny": [
+      "Read(./.env)"
+    ]
+  }
+}

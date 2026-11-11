@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import sys
 from pathlib import Path
 from typing import NamedTuple
 
@@ -70,7 +71,7 @@ class Data(NamedTuple):
 
 def load_data(data_dir: Path = config.DATA_DIR) -> Data:
     """Read the train/test CSVs, building them first when absent. Raw features."""
-    if not (data_dir / dataset.TRAIN_CSV).exists():
+    if not all((data_dir / f).exists() for f in (dataset.TRAIN_CSV, dataset.TEST_CSV)):
         dataset.build(data_dir)
     train_df = pd.read_csv(data_dir / dataset.TRAIN_CSV)
     test_df = pd.read_csv(data_dir / dataset.TEST_CSV)
@@ -206,13 +207,12 @@ def train(experiment, params: dict, data: Data):
     for epoch in range(params["epochs"]):
         model.train()
         optimizer.zero_grad()
-        logits = model(X_train)
-        loss = loss_fn(logits, y_train)
+        loss = loss_fn(model(X_train), y_train)
         loss.backward()
         optimizer.step()
         metrics = {
             "train_loss": loss.item(),
-            "train_accuracy": accuracy(data.y_train, logits.argmax(1).numpy()),
+            "train_accuracy": accuracy(data.y_train, predict(model, data.X_train)),
             "val_accuracy": accuracy(data.y_val, predict(model, data.X_val)),
         }
         experiment.log_metrics(metrics, epoch=epoch)
@@ -299,7 +299,7 @@ def train(experiment, params: dict, data: Data):
             "train_loss": float(
                 -np.log(probs[np.arange(len(onehot)), data.y_train] + 1e-12).mean()
             ),
-            "train_accuracy": accuracy(data.y_train, probs.argmax(axis=1)),
+            "train_accuracy": accuracy(data.y_train, predict(model, data.X_train)),
             "val_accuracy": accuracy(data.y_val, predict(model, data.X_val)),
         }
         experiment.log_metrics(metrics, epoch=epoch)
@@ -363,9 +363,13 @@ def main(argv=None) -> None:
         api = comet_ml.API()
         ws = registry.workspace(api)
         existing = registry.model_or_none(api, ws, MODEL_NAME)
-        version = args.version or bump_patch(existing.find_versions()[0] if existing else None)
+        versions = existing.find_versions() if existing else []
+        version = args.version or bump_patch(versions[0] if versions else None)
         rounded = {k: round(v, 4) for k, v in metrics.items()}
-        api.get_experiment_by_key(experiment.get_key()).register_model(
+        api_experiment = api.get_experiment_by_key(experiment.get_key())
+        if api_experiment is None:
+            sys.exit(f"model logged, not registered: experiment {experiment.get_key()} not found")
+        api_experiment.register_model(
             MODEL_NAME,
             version=version,
             status="Development",

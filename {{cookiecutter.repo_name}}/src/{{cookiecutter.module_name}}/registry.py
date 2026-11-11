@@ -54,7 +54,11 @@ def cmd_list(args: argparse.Namespace) -> None:
     model = _model(args)
     rows = []
     for version in model.find_versions(status=args.status):
-        details = model.get_details(version=version)
+        try:
+            details = model.get_details(version=version)
+        except Exception as exc:  # one broken version must not hide the others
+            rows.append({"version": version, "status": f"<error: {exc}>", "tags": []})
+            continue
         rows.append(
             {
                 "version": version,

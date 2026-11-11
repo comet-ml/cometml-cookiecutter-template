@@ -43,7 +43,7 @@ jobs:
         with:
           python-version-file: .python-version
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
-      - run: uv sync --no-dev
+      - run: uv sync
 
       - name: Fetch the version and smoke-test it
         # predict.py verifies the version still has the payload's status, so a stale or replayed

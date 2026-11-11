@@ -27,13 +27,14 @@ from {{ cookiecutter.module_name }} import config, registry, train
 predict = train.predict
 
 
-def resolve_version(model, status: str, version: str | None) -> str:
-    """The newest version with `status`, or `version` after checking it really has that status."""
+def resolve_version(model, status: str | None, version: str | None) -> str:
+    """`version` (checked against `status` when both are given), else the newest with `status`."""
     if version:
         current = model.status(version)
-        if current != status:
+        if status and current != status:
             raise SystemExit(f"{train.MODEL_NAME} {version} has status {current!r}, not {status!r}")
         return version
+    status = status or "Production"
     versions = model.find_versions(status=status)
     if not versions:
         raise SystemExit(f"no {train.MODEL_NAME} version has status {status!r}; promote one first")
@@ -64,8 +65,8 @@ def load_from_dir(model_dir: Path):
 
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--status", default="Production", help="registry status to deploy from")
-    parser.add_argument("--version", help="explicit registry version; must carry --status")
+    parser.add_argument("--status", help="registry status to deploy from (default: Production)")
+    parser.add_argument("--version", help="explicit version; with --status, verified against it")
     parser.add_argument("--rows", type=int, default=5)
     args = parser.parse_args(argv)
 
@@ -79,7 +80,7 @@ def main(argv=None) -> None:
 
     data = train.load_data()
     y_pred = predict(load_from_dir(target), data.X_val[: args.rows])
-    print(f"{train.MODEL_NAME} {version} ({args.status})")
+    print(f"{train.MODEL_NAME} {version}")
     for truth, pred in zip(data.y_val[: args.rows], y_pred, strict=True):
         print(f"  expected={train.LABELS[truth]:<11} predicted={train.LABELS[pred]}")
 

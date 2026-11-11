@@ -17,8 +17,7 @@ api.get_experiment_by_key(key).register_model(   # synchronous; raises when the 
 ```
 
 The model must have been logged to that experiment first (`experiment.log_model(name, path)`).
-`experiment.register_model(...)` also exists but is fire-and-forget (a rejection is only logged at
-`end()`). `train.py` picks the next patch version with `bump_patch(model.find_versions()[0])`.
+`experiment.register_model(...)` also exists but only logs a rejection (even `sync=True` just waits). `train.py` picks the next patch version with `bump_patch(model.find_versions()[0])`.
 
 ## Reading and mutating after registration
 

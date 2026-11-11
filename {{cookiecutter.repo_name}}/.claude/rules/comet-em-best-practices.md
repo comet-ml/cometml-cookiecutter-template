@@ -91,8 +91,8 @@ finally:
   state_dict, not a module. A logged model lives inside one experiment.
 - Register only a run that cleared its gate, after `experiment.end()`, through the REST client:
   `api.get_experiment_by_key(key).register_model(name, version=, status=, tags=, metadata=)`. It is
-  synchronous and raises when the backend rejects the version. (`experiment.register_model` is
-  fire-and-forget: a rejection is only logged at `end()`.) `version` is semver and required in
+  synchronous and raises when the backend rejects the version. (`experiment.register_model` only
+  logs a rejection, even with `sync=True`, which waits but exposes no result.) `version` is semver and required in
   practice: it defaults to `1.0.0` and duplicates are rejected. `train.py` bumps the patch of the
   latest version; bump minor for a retrain with new hyperparameters, major for new data or architecture.
 - `metadata=` carries provenance: dataset Artifact version and the final metrics. Comet already logs the

@@ -34,9 +34,11 @@ def build(data_dir: Path = config.DATA_DIR) -> tuple[Path, Path]:
 
 def record_lineage(experiment: comet_ml.CometExperiment) -> str:
     """Attach the latest dataset Artifact to a training experiment; its version, or "local"."""
+    if isinstance(experiment, comet_ml.OfflineExperiment):  # Artifacts need the backend
+        return "local"
     try:
         return str(experiment.get_artifact(DATASET_NAME).version)
-    except Exception as exc:  # offline, no network, or `make data` never ran: training still works
+    except Exception as exc:  # no network, or `make data` never ran: training still works
         print(f"dataset lineage not recorded ({exc}); run `make data` online to create it")
         return "local"
 
@@ -51,6 +53,9 @@ def main() -> None:
         ),
     )
     try:
+        if isinstance(experiment, comet_ml.OfflineExperiment):
+            print("offline: Artifact not logged (Artifacts need the backend)")
+            return
         artifact = comet_ml.Artifact(name=DATASET_NAME, artifact_type="dataset")
         for path in paths:
             artifact.add(str(path))

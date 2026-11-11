@@ -10,9 +10,8 @@ dist/
 .eggs/
 *.egg
 
-# uv / venv
+# uv / venv (commit uv.lock)
 .venv/
-.python-version-local
 
 # Tooling caches
 .pytest_cache/
@@ -34,7 +33,15 @@ htmlcov/
 .cometml-runs/
 .comet.config
 
-# Secrets — NEVER commit
+# Comet MCP server telemetry (written to the cwd; contains tool arguments)
+traces.jsonl
+logs.jsonl
+
+# Claude Code per-user files
+.claude/settings.local.json
+CLAUDE.local.md
+
+# Secrets - NEVER commit
 .env
 .env.local
 .env.*.local

@@ -1,328 +1,156 @@
+---
+paths:
+  - "src/**"
+  - "scripts/**"
+  - "notebooks/**"
+  - "tests/**"
+---
+
 # Comet EM Best Practices
 
-Behavioral rules for AI assistants working with `comet-ml` in this project. Organized around the MLOps lifecycle: **config → data → training → model → registry → reuse**.
+Rules for working with `comet-ml` in this project, in lifecycle order: **config -> data -> training ->
+model -> registry -> consume**. The runnable version of every rule is `src/{{ cookiecutter.module_name }}/`
+(`dataset.py`, `train.py`, `sweep.py`, `predict.py`); when this file and that code disagree, fix the one
+that is wrong rather than working around it.
 
-## Reference: full SDK configuration
+## 0. Credentials and configuration
 
-The complete configuration surface (timeouts, retry policy, batching, log levels, telemetry, offline mode, backend URLs) is documented at:
+- Read `COMET_API_KEY`, `COMET_WORKSPACE`, `COMET_PROJECT_NAME`, `COMET_URL_OVERRIDE` through
+  `src/{{ cookiecutter.module_name }}/config.py` (it loads `.env`). Never hardcode a key, never print one.
+- `.env` is gitignored and the Read tool is denied on it in `.claude/settings.json`. Share `.env.example` instead.
+- Every SDK setting is an env var (`COMET_*`), a `.comet.config` entry, or a `comet_ml.login(...)` argument.
+  Env var wins. Reference: <https://www.comet.com/docs/v2/guides/experiment-management/configure-sdk/>.
+  Common ones: `COMET_TIMEOUT_CLEANING` / `COMET_TIMEOUT_UPLOAD` (slow `end()`), `COMET_AUTO_LOG_*`
+  (per-framework autologging), `COMET_LOGGING_FILE_LEVEL`, `COMET_START_ONLINE=false` (offline).
+- Automated jobs (CI, schedulers) use a **Service Account** key, not a person's:
+  <https://www.comet.com/docs/v2/guides/comet-ui/admin-dashboard/service-accounts/>.
 
-**<https://www.comet.com/docs/v2/guides/experiment-management/configure-sdk/>**
-
-Consult that page first when diagnosing:
-
-- Upload/sync timeouts (`COMET_TIMEOUT_*` vars)
-- Slow `experiment.end()` flushes (raise `COMET_STREAMER_*` workers)
-- Connection refused / `url_override` issues
-- Auto-logging behavior toggles (per-framework, e.g. `COMET_AUTO_LOG_*`)
-- File-upload size limits and chunking
-- Log-level / verbosity (`COMET_LOGGING_*`)
-
-All settings can be set via env var (preferred — keep them in `.env`), via `.comet.config`, or programmatically via `comet_ml.config.set_config`. Env var wins.
-
-## Reference: Comet MCP server (for AI agents)
-
-This project ships a `.mcp.json` that auto-registers the [Comet MCP server](https://www.comet.com/docs/v2/api-and-sdk/mcp-server/overview/) with Claude Code. The MCP server exposes these tools (snake_case, not `comet-mcp__list-experiments` style):
-
-| Tool | Purpose |
-|------|---------|
-| `list_experiments` | List experiments in a project |
-| `get_experiment_details` | Metadata, tags, URL for one experiment |
-| `get_experiment_metric_data` | All logged metric values + steps |
-| `get_experiment_parameters` | Hyperparameters |
-| `list_projects` | Projects in the workspace |
-
-**Prefer MCP queries over local log parsing.** When the user asks "what did the last run achieve" or "compare runs X and Y", call the MCP server — it returns the canonical Comet state. Local `make train` logs may be stale or truncated.
-
-For shell setup (loading `.env` into the environment so the MCP server picks up credentials), see the README's "MCP setup" section.
-
-The MCP server does **not** currently expose registry mutations (status / tags). Those go through `comet_ml.API` directly via `scripts/registry_mutate.py` — see the `promote-model` skill. The MCP server also does not expose registry reads — registry state (versions, status, tags) comes from `scripts/registry_mutate.py list ...` as well.
-
-If an MCP tool ever returns an unexpected error or the name has shifted in a newer release, fall back to direct `comet_ml.API` calls — every skill includes the fallback snippet. Don't silently swallow MCP errors.
-
-## 0. Credentials — never hardcode
-
-- Read `COMET_API_KEY`, `COMET_WORKSPACE`, `COMET_PROJECT_NAME`, `COMET_URL_OVERRIDE` from `src/{{ cookiecutter.module_name }}/config.py` (loads `.env` via `python-dotenv`).
-- `.env` is gitignored. Never commit it. Never paste API keys into code, notebooks, READMEs, or chat messages.
-- `COMET_URL_OVERRIDE` defaults to the public SaaS clientlib endpoint. Change only for single-tenant / on-prem deployments — see the [SDK configuration docs](https://www.comet.com/docs/v2/guides/experiment-management/configure-sdk/).
-- For shared examples, refer to `.env.example`.
+## 1. One experiment per run, created with `comet_ml.start()`
 
 ```python
 import comet_ml
 from {{ cookiecutter.module_name }} import config
 
-experiment = comet_ml.Experiment(
-    api_key=config.COMET_API_KEY,
-    workspace=config.COMET_WORKSPACE,
+experiment = comet_ml.start(
     project_name=config.COMET_PROJECT_NAME,
+    experiment_config=comet_ml.ExperimentConfig(
+        name=config.experiment_name("iris-classifier"),
+        tags=["example", "framework={{ cookiecutter.framework }}"],
+    ),
 )
-```
-
-## 1. One Experiment per run
-
-- Construct `comet_ml.Experiment(...)` once at the start of a training/evaluation run.
-- Always call `experiment.end()` (or use a `try/finally`) — otherwise the last batch of metrics may not flush.
-- Don't share an `Experiment` across multiple training runs. Each run = one Experiment.
-
-```python
 try:
-    # ... training ...
+    ...
 finally:
     experiment.end()
 ```
 
-## 2. Log code + environment for reproducibility
+- `start()` reads the key, workspace and URL from the environment, honors `COMET_START_ONLINE=false`,
+  can resume by `experiment_key`, and reuses the running experiment when a notebook cell re-runs.
+  `comet_ml.Experiment(...)` still works but has none of that.
+- `Experiment` is **not** a context manager: `try/finally: experiment.end()`.
+- One run = one experiment. A sweep is many experiments (see `sweep.py`).
 
-At the start of every run:
+## 2. Naming and tags
 
-```python
-experiment.log_code(folder="src")                  # snapshot of src/ at run time
-experiment.log_parameters(hyperparams)             # all hyperparams as a dict
-experiment.set_name("baseline-iris-2026-05-28")    # optional human label
-experiment.add_tags(["baseline", "framework={{ cookiecutter.framework }}"])
-```
+- Names come from `config.experiment_name(model_name)`:
+  `{project}-{model}-{YYYYMMDD}-{HHmm}` in UTC. Unique across archived runs, sortable, readable.
+  Never append a counter: archiving an experiment frees its number and the next run collides.
+- Tags carry the dimensions you filter on: `key=value` for sortable ones (`framework=pytorch`,
+  `dataset=v2`), single words for stages (`baseline`, `sweep`, `exploration`). Don't pack them into the name.
+- Comet logs git SHA, uncommitted patch, packages, host and CLI args on its own. Don't duplicate them.
 
-Comet automatically logs: git commit SHA, git patch (uncommitted diff), Python version, installed packages, hostname, CLI args. Don't duplicate these manually.
+## 3. Datasets: one Artifact, consumed by version
 
-## 3. Log datasets
+- `make data` writes `data/processed/iris-*.csv` and logs them as a new version of Artifact
+  `iris-dataset`. Run it when the data changes, not before every training run.
+- Training reads the CSVs and records lineage with `experiment.get_artifact("iris-dataset")`
+  (`dataset.record_lineage`). It never re-logs the dataset. The version lands in registry metadata.
+- Data that lives in S3/GCS stays there: register a remote Artifact (`artifact.add_remote(uri)`) so Comet
+  stores the reference and checksum. For a cheap fingerprint without an Artifact, `experiment.log_dataset_hash(df)`.
 
-Three options, in increasing power:
-
-### 3a. Quick fingerprint — `log_dataset_hash`
-
-```python
-experiment.log_dataset_hash(df)   # logs an MD5 of the data
-```
-
-Cheap; lets you confirm two runs used the exact same data. Doesn't preserve the data itself.
-
-### 3b. Metadata reference — `log_dataset_info`
-
-```python
-experiment.log_dataset_info(name="iris-v1", version="1.0.0", path="data/processed/")
-```
-
-Records what dataset was used without uploading it. Use when the dataset lives in S3/GCS/HF and is identified by a path or version.
-
-### 3c. Versioned artifact — `log_artifact` (recommended for first-class datasets)
-
-```python
-from comet_ml import Artifact
-
-artifact = Artifact(name="iris-dataset", artifact_type="dataset")
-artifact.add("data/processed/iris-train.csv")
-artifact.add("data/processed/iris-test.csv")
-experiment.log_artifact(artifact)
-```
-
-Artifacts are workspace-level, versioned, and **reusable across experiments**. See section 6.
-
-## 4. Log metrics, hyperparameters, plots
+## 4. Metrics, parameters, assets
 
 | Kind | API | When |
 |------|-----|------|
-| Hyperparameters | `experiment.log_parameters(dict)` | Once, at start |
-| Scalar metrics | `experiment.log_metric(name, value, step=...)` | Every step/epoch |
-| Multiple metrics | `experiment.log_metrics(dict, step=...)` | Same — batched |
-| Final metrics | `experiment.log_metric("test_accuracy", ...)` | At eval |
-| Confusion matrix | `experiment.log_confusion_matrix(y_true, y_pred)` | At eval |
-| Figures | `experiment.log_figure(name, matplotlib_fig)` | When generated |
-| Tables | `experiment.log_table(name, dataframe)` | When generated |
-| Text | `experiment.log_text(text)` | For traces, prompts, predictions |
+| Hyperparameters | `experiment.log_parameters(dict)` | Once, at start (`train()` does it) |
+| Per-epoch metrics | `experiment.log_metrics(dict, epoch=...)` | Every epoch; `step=` for batches |
+| Confusion matrix | `experiment.log_confusion_matrix(y_true=, y_predicted=, labels=)` | After eval |
+| Figures / tables / text | `log_figure`, `log_table`, `log_text` | When produced |
 
-## 5. Log + version models
+- Autologging covers Keras `fit`, PyTorch `backward`, sklearn params, XGBoost `eval_set` curves.
+  Either rely on it or log yourself under different names (`train.py` sets `auto_metric_logging=False`
+  and logs `train_*` / `val_*`). Logging the same name twice at the same step overwrites silently.
+- The metric that gates promotion is `val_accuracy`; `thresholds.yaml` holds the bar.
 
-After training, persist the model to disk and log it to the experiment:
+## 5. Models: log, then register, then consume
 
-```python
-# 1. Save to disk (framework-specific)
-import joblib
-joblib.dump(model, "models/iris-classifier.pkl")
+- Save the model **with its preprocessing** (`train.save_model`: sklearn `Pipeline`, a scaling layer or
+  buffers, or stats in the file) and `experiment.log_model(name, path)`. A registry version must run on
+  raw features; a model that needs the training-time scaler recomputed elsewhere is not deployable.
+  `comet_ml.integration.<framework>.log_model` helpers exist, but note the pytorch one saves a
+  state_dict, not a module. A logged model lives inside one experiment.
+- Register only a run that cleared its gate: `experiment.register_model(name, version=, status=, tags=,
+  metadata=)`. `version` is **semver and required in practice**: it defaults to `1.0.0` and a duplicate
+  is rejected (logged at `end()`, not raised). `train.py` bumps the patch of the latest version; bump
+  minor for a retrain with new hyperparameters, major for new data or architecture.
+- `metadata=` carries provenance: dataset Artifact version, gate metric, git SHA.
+- **Status** is one value per version (`None`, `Development`, `Staging`, `QA`, `Production` by default;
+  workspace-configurable, with an approval workflow). **Tags** are free-form and many. Deploy pipelines
+  select by status; humans slice by tags. Comet does **not** demote the previous holder when you set a
+  new one: `/promote-model` handles that explicitly.
+- Status changes after registration go through `scripts/registry_mutate.py` (`/promote-model`), never
+  ad-hoc `python -c`. Reading the registry (versions, status, tags) also goes through that script: the
+  MCP server has no registry tools.
+- Consume by status, never by local path: `api.get_model(ws, name).find_versions(status="Production")[0]`
+  then `.download(version, output_folder=...)` and `predict.load_from_dir`. `predict.py` is the
+  reference; the deploy workflow does the same from a status-change webhook.
 
-# 2. Log to the experiment
-experiment.log_model(
-    name="iris-classifier",
-    file_or_folder="models/iris-classifier.pkl",
-)
-```
+## 6. Agents: the Comet MCP server
 
-Logged models live **inside the experiment**. They are tied to that single run. To make them discoverable and promotable across the workspace, you need section 6.
+`.mcp.json` registers `comet-mcp` and `.claude/settings.json` pre-approves it (tools appear as
+`mcp__comet-mcp__<tool>`). It needs `COMET_API_KEY` / `COMET_WORKSPACE` **in the shell environment**,
+not only in `.env` (`set -a && source .env && set +a`, or direnv).
 
-### Framework-specific save patterns
+Always pass `workspace=` and `project_name=` from `.env`: with neither, the server queries the account's
+default workspace and project `general`.
 
-| Framework | Save |
-|-----------|------|
-| sklearn | `joblib.dump(model, "models/foo.pkl")` |
-| xgboost | `model.save_model("models/foo.json")` |
-| pytorch | `torch.save(model.state_dict(), "models/foo.pt")` |
-| tensorflow | `model.save("models/foo.keras")` |
+| Need | Tool |
+|------|------|
+| Latest runs | `list_experiments(workspace, project_name, page_size=N, sort_by="startTime", sort_order="desc")` |
+| Final and best metric values | `get_experiment_summary(experiment_id)` ("best" is the max, wrong for losses) |
+| Curves | `get_experiment_training_progress(experiment_id, metric_names)` / `get_experiment_metric_data(experiment_ids, metric_names, x_axis)` |
+| Hyperparameters, tags, URL | `get_experiment_parameters`, `get_experiment_details` |
+| Runs by tag / by metric | `find_tagged_experiments(tag, ...)`, `query_experiments(name, comparison, value, ...)` |
+| Many runs at once | `experiment_spreadsheet(workspace, project_name, experiment_keys)` (CSV) |
+| Why a run failed | `get_experiment_output(experiment_id)` (stdout/stderr), `get_experiment_code`, `get_experiment_assets` / `analyze_experiment_asset` |
+| Project overview | `list_projects`, `get_project_details`, `get_all_experiments_summary`, `get_project_tags`, `get_project_logged_item_names`, `validate_project`, `get_default_workspace`, `get_session_info` |
 
-## 6. Register models to the Model Registry
+The MCP server reads experiments only. No registry reads or writes, no experiment creation.
+When a tool errors, fall back to `comet_ml.API` (each skill carries a working snippet) and say so.
 
-The **Model Registry** is the workspace-level catalog used by deploy/serve pipelines. Promote your logged model after the run is good enough:
+## 7. Offline runs
 
-```python
-# Promote the model logged in step 5 to the workspace registry.
-experiment.register_model(
-    model_name="iris-classifier",                # registry name (workspace-unique)
-    version="1.0.0",                             # optional — Comet auto-increments if omitted
-    tags=["staging"],                            # free-form tags (see status vs tags below)
-    public=False,
-    description="Baseline LR; trained on iris-v1 dataset.",
-)
-```
-
-### Status vs tags — two different fields
-
-The registry has **two independent labels** on every version. Don't conflate them.
-
-| Field | Cardinality | Default values | Used by |
-|-------|-------------|----------------|---------|
-| **Status** | One per version | `None`, `Development`, `Staging`, `QA`, `Production` (Comet's standard set; workspace-configurable) | Deploy/serve pipelines that fetch "the Production version". |
-| **Tags** | Many per version | Free-form strings: `champion`, `canary`, `lr=0.01`, `paper-2026`, etc. | Slicing, A/B groups, descriptive metadata. |
-
-### How to set them
-
-**At registration time** — `experiment.register_model` accepts BOTH `tags=` and `status=`:
-
-```python
-experiment.register_model(
-    model_name="iris-classifier",
-    version="1.0.0",
-    status="Development",            # single-value enum from allowed-statuses
-    tags=["example", "lr=0.01"],     # multi-value free-form
-    description="Baseline LR; trained on iris-v1 dataset.",
-)
-```
-
-**After registration** — use the `comet_ml.API` + `Model` object. The exact methods (verified against `comet-ml` 3.x):
-
-```python
-from comet_ml import API
-api = API()
-model = api.get_model(workspace="<ws>", model_name="iris-classifier")
-
-# Allowed status values (workspace-configurable):
-api.model_registry_allowed_status_values(workspace="<ws>")
-
-# Status — single-value setter:
-model.set_status(version="1.0.0", status="Production")
-
-# Tags — single-tag add/remove (NO bulk-set call exists):
-model.add_tag(version="1.0.0", tag="champion")
-model.delete_tag(version="1.0.0", tag="canary")
-
-# Inspect current state:
-versions = model.find_versions()                # list of version strings
-details = model.get_details(version="1.0.0")    # dict with status, tags, etc.
-```
-
-The training examples in `src/<module>/train.py` register with `status="Development"` + `tags=["example"]`. To advance status (Staging → QA → Production), use the `/promote-model` skill, which wraps these calls in `scripts/registry_mutate.py` with safe argv handling.
-
-### Conventions
-
-- **status** — only one Production version at a time per registry. The deploy pipeline pulls by status, so duplicate Production status leads to ambiguous routing. **Comet does NOT auto-demote** the prior holder when you set a new one — you must explicitly set the old version's status to something else.
-- **tags** — anything goes; common patterns: lifecycle (`champion`, `canary`, `challenger`), provenance (`paper-2026`, `release-2026-05`), config (`lr=0.01`, `dataset=v2`).
-- **version** — semver. Bump minor for retrains on same data + tweaked hparams, bump major for new dataset or new architecture.
-- **description** — terse, references the dataset version and any non-default training config.
-
-### Conventions
-
-- **status** — only one Production version at a time per registry. The deploy pipeline pulls "the Production model" by status, so duplicate Production status leads to ambiguous routing.
-- **tags** — anything goes; common patterns: lifecycle (`champion`, `canary`, `challenger`), provenance (`paper-2026`, `release-2026-05`), config (`lr=0.01`, `dataset=v2`).
-- **version** — semver. Bump minor for retrains on same data + tweaked hparams, bump major for new dataset or new architecture.
-- **description** — terse, references the dataset version and any non-default training config.
-
-To consume a registered model elsewhere:
-
-```python
-from comet_ml import API
-
-api = API()
-api.download_registry_model(
-    workspace=config.COMET_WORKSPACE,
-    registry_name="iris-classifier",
-    version="1.0.0",
-    output_path="models/",
-)
-```
-
-## 7. Reuse datasets across experiments
-
-Pull a previously logged artifact in a new run:
-
-```python
-logged_artifact = experiment.get_artifact(
-    artifact_name="iris-dataset",
-    workspace=config.COMET_WORKSPACE,
-    version_or_alias="1.0.0",      # or "latest"
-)
-logged_artifact.download(path="data/external/iris/")
-```
-
-This gives you provenance (you know exactly which dataset version this run used) without re-uploading.
-
-## 8. Tagging conventions
-
-Tags are queryable in the Comet UI — use them to slice runs.
-
-```python
-experiment.add_tag("baseline")
-experiment.add_tags(["arch=resnet50", "dataset=cifar10-v2", "lr=0.01"])
-```
-
-- `key=value` tags for sortable dimensions (lr, arch, dataset version).
-- Single-word tags for stages (`baseline`, `ablation`, `final`, `production-candidate`).
-- Don't pack everything into the experiment name — use tags so the UI can filter.
-
-## 9. Hyperparameter sweeps
-
-Use `comet_ml.Optimizer` over hand-rolled grid/random loops. It logs the sweep config server-side and streams trial results:
-
-```python
-opt_config = {
-    "algorithm": "bayes",
-    "spec": {"metric": "test_accuracy", "objective": "maximize"},
-    "parameters": {"lr": {"type": "float", "min": 1e-4, "max": 1e-1}},
-    "name": "iris-lr-sweep",
-}
-optimizer = comet_ml.Optimizer(opt_config)
-
-for experiment in optimizer.get_experiments(
-    project_name=config.COMET_PROJECT_NAME,
-    workspace=config.COMET_WORKSPACE,
-):
-    lr = experiment.get_parameter("lr")
-    # ... train, log_metric("test_accuracy", ...) ...
-    experiment.end()
-```
-
-One `Experiment` per trial.
-
-## 10. Offline mode
-
-For airgapped or CI environments:
-
-```bash
-COMET_MODE=offline make train
-```
-
-Writes a `.zip` under `./.cometml-runs/` that uploads later with `comet upload <file>.zip`.
+`COMET_START_ONLINE=false make train` writes `.cometml-runs/<key>.zip`; upload later with
+`comet upload <zip>`. Offline experiments cannot log or fetch Artifacts and cannot register models, so
+`train.py` skips both. Use it for airgapped training, not for CI (CI runs the credential-free tests).
 
 ## Anti-patterns
 
-- `experiment = comet_ml.Experiment(api_key="abc123...")` — hardcoded key. Use `config.COMET_API_KEY`.
-- Logging the same metric name twice in the same step — overwrites silently.
-- Forgetting `experiment.end()` — last writes lost.
-- Mixing multiple training runs into one Experiment — defeats the purpose.
-- Logging a model with `log_model` but never `register_model` — model is buried inside one experiment, invisible to deploy pipelines.
-- Re-uploading the same dataset on every run instead of `get_artifact(...)`.
-- Hardcoding model paths instead of pulling from the registry — breaks reproducibility.
+- Hardcoded or printed API keys; reading `.env` from the agent.
+- A counter in the experiment name; a name that tries to be the tag list.
+- Re-uploading the dataset Artifact on every run.
+- Registering every run, or registering without `version=` after the first.
+- Two versions in `Production` because the old one was never demoted.
+- Loading a model from `models/*.pkl` in serving code instead of the registry.
+- MCP queries without `workspace=` / `project_name=`.
+- `COMET_MODE=offline` (not a setting), `comet_ml.config.set_config` (does not exist),
+  `api.download_registry_model` (deprecated; use `Model.download`).
 
 ## Lifecycle checklist (paste into PR description)
 
-- [ ] `log_code`, `log_parameters`, tags set at start
-- [ ] Dataset logged via `log_artifact` (or `log_dataset_info` if external)
-- [ ] Metrics logged per step + final eval metric
-- [ ] Model saved to `models/` and logged via `log_model`
-- [ ] If run is a candidate for deployment: `register_model` with stage + description
-- [ ] `experiment.end()` in a `try/finally`
+- [ ] Experiment created with `comet_ml.start()` and named via `config.experiment_name`
+- [ ] Dataset consumed from the `iris-dataset` Artifact, not re-uploaded
+- [ ] Per-epoch `train_*` / `val_*` metrics and a confusion matrix logged
+- [ ] Model logged; registered only when `thresholds.yaml` passes, with semver + metadata
+- [ ] Status changes done through `/promote-model`, previous holder demoted
+- [ ] `experiment.end()` in `finally`

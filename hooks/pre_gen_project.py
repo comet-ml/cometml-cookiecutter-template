@@ -7,6 +7,8 @@ REPO_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
 module_name = "{{ cookiecutter.module_name }}"
 repo_name = "{{ cookiecutter.repo_name }}"
+framework = "{{ cookiecutter.framework }}"
+python_version = "{{ cookiecutter.python_version }}"
 
 errors = []
 
@@ -21,6 +23,9 @@ if not REPO_RE.match(repo_name):
         f"ERROR: repo_name '{repo_name}' is not a valid repo slug. "
         "Use lowercase letters, digits, and hyphens; must start with a letter or digit."
     )
+
+if framework == "tensorflow" and python_version == "3.13":
+    errors.append("ERROR: tensorflow has no Python 3.13 wheels yet; pick python_version 3.12 or lower.")
 
 if errors:
     for e in errors:

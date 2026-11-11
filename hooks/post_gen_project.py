@@ -1,465 +1,80 @@
 """Post-generation hook.
 
 Responsibilities:
-- Drop the framework-specific train.py and append matching deps to pyproject.toml.
+- Append framework-specific deps (and, for pytorch, a CPU-only wheel index) to pyproject.toml.
 - Drop the chosen LICENSE (or delete it for Proprietary / None).
-- Run `git init`.
+- Run `git init` + `git add .` (nothing is committed).
 - Print next-steps banner.
+
+The training code itself lives in src/<module>/train.py as a Jinja-templated file.
 """
 from __future__ import annotations
 
 import re
 import subprocess
 import sys
+from datetime import date
 from pathlib import Path
 from textwrap import dedent
 
 FRAMEWORK = "{{ cookiecutter.framework }}"
 LICENSE = "{{ cookiecutter.open_source_license }}"
-MODULE_NAME = "{{ cookiecutter.module_name }}"
 REPO_NAME = "{{ cookiecutter.repo_name }}"
 AUTHOR_NAME = "{{ cookiecutter.author_name }}"
 
 ROOT = Path.cwd()
-TRAIN_PATH = ROOT / "src" / MODULE_NAME / "train.py"
 PYPROJECT_PATH = ROOT / "pyproject.toml"
 LICENSE_PATH = ROOT / "LICENSE"
 
-
-# --- Framework-specific train.py ----------------------------------------------
-
-_MODULE_PLACEHOLDER = "__MODULE_NAME__"
-
-SKLEARN_TRAIN = '''"""Example experiment: sklearn LogisticRegression on iris, full Comet MLOps lifecycle."""
-from pathlib import Path
-
-import comet_ml
-import joblib
-import pandas as pd
-from comet_ml import Artifact
-from sklearn.datasets import load_iris
-from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import train_test_split
-
-from __MODULE_NAME__ import config
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DATA_DIR = PROJECT_ROOT / "data" / "processed"
-MODELS_DIR = PROJECT_ROOT / "models"
-MODEL_NAME = "iris-classifier"
-DATASET_NAME = "iris-dataset"
-
-
-def main() -> None:
-    experiment = comet_ml.Experiment(
-        api_key=config.COMET_API_KEY,
-        workspace=config.COMET_WORKSPACE,
-        project_name=config.COMET_PROJECT_NAME,
-    )
-    try:
-        # --- 1. Code + tags -------------------------------------------------
-        experiment.log_code(folder=str(PROJECT_ROOT / "src"))
-        experiment.add_tags(["example", "framework=sklearn", "model=logreg"])
-
-        # --- 2. Load + persist dataset, log as a versioned Artifact ---------
-        X, y = load_iris(return_X_y=True, as_frame=True)
-        df = pd.concat([X, y.rename("target")], axis=1)
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        train_df, test_df = train_test_split(df, test_size=0.2, random_state=42)
-        train_path = DATA_DIR / "iris-train.csv"
-        test_path = DATA_DIR / "iris-test.csv"
-        train_df.to_csv(train_path, index=False)
-        test_df.to_csv(test_path, index=False)
-
-        dataset_artifact = Artifact(name=DATASET_NAME, artifact_type="dataset")
-        dataset_artifact.add(str(train_path))
-        dataset_artifact.add(str(test_path))
-        experiment.log_artifact(dataset_artifact)
-        experiment.log_dataset_hash(df)
-
-        # --- 3. Train + log metrics ----------------------------------------
-        params = {"max_iter": 200, "solver": "lbfgs", "random_state": 42}
-        experiment.log_parameters(params)
-
-        X_train, y_train = train_df.drop(columns=["target"]), train_df["target"]
-        X_test, y_test = test_df.drop(columns=["target"]), test_df["target"]
-
-        model = LogisticRegression(**params).fit(X_train, y_train)
-        experiment.log_metric("train_accuracy", model.score(X_train, y_train))
-        experiment.log_metric("test_accuracy", model.score(X_test, y_test))
-
-        # --- 4. Save model file + log to experiment ------------------------
-        MODELS_DIR.mkdir(parents=True, exist_ok=True)
-        model_path = MODELS_DIR / f"{MODEL_NAME}.pkl"
-        joblib.dump(model, model_path)
-        experiment.log_model(name=MODEL_NAME, file_or_folder=str(model_path))
-
-        # --- 5. Register to Model Registry --------------------------------
-        # Sets initial status to Development + tag "example".
-        # Use the /promote-model skill to advance status (Staging/QA/Production).
-        # Comment out if you only want to log models inside experiments.
-        experiment.register_model(
-            model_name=MODEL_NAME,
-            status="Development",
-            tags=["example"],
-            description="Baseline sklearn LogisticRegression trained on iris-dataset.",
-        )
-    finally:
-        experiment.end()
-
-
-if __name__ == "__main__":
-    main()
-'''
-
-XGBOOST_TRAIN = '''"""Example experiment: xgboost classifier on iris, full Comet MLOps lifecycle."""
-from pathlib import Path
-
-import comet_ml
-import pandas as pd
-import xgboost as xgb
-from comet_ml import Artifact
-from sklearn.datasets import load_iris
-from sklearn.metrics import accuracy_score
-from sklearn.model_selection import train_test_split
-
-from __MODULE_NAME__ import config
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DATA_DIR = PROJECT_ROOT / "data" / "processed"
-MODELS_DIR = PROJECT_ROOT / "models"
-MODEL_NAME = "iris-xgb-classifier"
-DATASET_NAME = "iris-dataset"
-
-
-def main() -> None:
-    experiment = comet_ml.Experiment(
-        api_key=config.COMET_API_KEY,
-        workspace=config.COMET_WORKSPACE,
-        project_name=config.COMET_PROJECT_NAME,
-    )
-    try:
-        # --- 1. Code + tags -------------------------------------------------
-        experiment.log_code(folder=str(PROJECT_ROOT / "src"))
-        experiment.add_tags(["example", "framework=xgboost", "model=xgbclassifier"])
-
-        # --- 2. Load + persist dataset, log as a versioned Artifact ---------
-        X, y = load_iris(return_X_y=True, as_frame=True)
-        df = pd.concat([X, y.rename("target")], axis=1)
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        train_df, test_df = train_test_split(df, test_size=0.2, random_state=42)
-        train_path = DATA_DIR / "iris-train.csv"
-        test_path = DATA_DIR / "iris-test.csv"
-        train_df.to_csv(train_path, index=False)
-        test_df.to_csv(test_path, index=False)
-
-        dataset_artifact = Artifact(name=DATASET_NAME, artifact_type="dataset")
-        dataset_artifact.add(str(train_path))
-        dataset_artifact.add(str(test_path))
-        experiment.log_artifact(dataset_artifact)
-        experiment.log_dataset_hash(df)
-
-        # --- 3. Train + log metrics ----------------------------------------
-        params = {
-            "n_estimators": 50,
-            "max_depth": 3,
-            "learning_rate": 0.1,
-            "objective": "multi:softprob",
-            "num_class": 3,
-            "random_state": 42,
-        }
-        experiment.log_parameters(params)
-
-        X_train, y_train = train_df.drop(columns=["target"]), train_df["target"]
-        X_test, y_test = test_df.drop(columns=["target"]), test_df["target"]
-
-        model = xgb.XGBClassifier(**params).fit(X_train, y_train)
-        experiment.log_metric("train_accuracy", accuracy_score(y_train, model.predict(X_train)))
-        experiment.log_metric("test_accuracy", accuracy_score(y_test, model.predict(X_test)))
-
-        # --- 4. Save model file + log to experiment ------------------------
-        MODELS_DIR.mkdir(parents=True, exist_ok=True)
-        model_path = MODELS_DIR / f"{MODEL_NAME}.json"
-        model.save_model(str(model_path))
-        experiment.log_model(name=MODEL_NAME, file_or_folder=str(model_path))
-
-        # --- 5. Register to Model Registry --------------------------------
-        # Sets initial status to Development + tag "example".
-        # Use the /promote-model skill to advance status (Staging/QA/Production).
-        experiment.register_model(
-            model_name=MODEL_NAME,
-            status="Development",
-            tags=["example"],
-            description="Baseline XGBClassifier trained on iris-dataset.",
-        )
-    finally:
-        experiment.end()
-
-
-if __name__ == "__main__":
-    main()
-'''
-
-PYTORCH_TRAIN = '''"""Example experiment: tiny torch model + one training step, full Comet MLOps lifecycle."""
-from pathlib import Path
-
-import comet_ml
-import torch
-from torch import nn
-
-from __MODULE_NAME__ import config
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-MODELS_DIR = PROJECT_ROOT / "models"
-MODEL_NAME = "tiny-torch-net"
-
-
-class TinyNet(nn.Module):
-    def __init__(self) -> None:
-        super().__init__()
-        self.net = nn.Sequential(nn.Linear(10, 16), nn.ReLU(), nn.Linear(16, 1))
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.net(x)
-
-
-def main() -> None:
-    experiment = comet_ml.Experiment(
-        api_key=config.COMET_API_KEY,
-        workspace=config.COMET_WORKSPACE,
-        project_name=config.COMET_PROJECT_NAME,
-    )
-    try:
-        experiment.log_code(folder=str(PROJECT_ROOT / "src"))
-        experiment.add_tags(["example", "framework=pytorch"])
-
-        torch.manual_seed(42)
-        model = TinyNet()
-        optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
-        loss_fn = nn.MSELoss()
-
-        experiment.log_parameters({"lr": 0.01, "optimizer": "SGD", "loss": "MSE"})
-
-        x = torch.randn(32, 10)
-        y = torch.randn(32, 1)
-
-        optimizer.zero_grad()
-        pred = model(x)
-        loss = loss_fn(pred, y)
-        loss.backward()
-        optimizer.step()
-        experiment.log_metric("loss", loss.item(), step=0)
-
-        # --- Save + log model ---------------------------------------------
-        MODELS_DIR.mkdir(parents=True, exist_ok=True)
-        model_path = MODELS_DIR / f"{MODEL_NAME}.pt"
-        torch.save(model.state_dict(), model_path)
-        experiment.log_model(name=MODEL_NAME, file_or_folder=str(model_path))
-
-        # --- Register to Model Registry -----------------------------------
-        # Sets initial status to Development + tag "example".
-        # Use the /promote-model skill to advance status (Staging/QA/Production).
-        experiment.register_model(
-            model_name=MODEL_NAME,
-            status="Development",
-            tags=["example"],
-            description="Tiny 2-layer MLP, single training step on synthetic data.",
-        )
-    finally:
-        experiment.end()
-
-
-if __name__ == "__main__":
-    main()
-'''
-
-TENSORFLOW_TRAIN = '''"""Example experiment: tiny tf.keras model + one train_on_batch, full Comet MLOps lifecycle."""
-from pathlib import Path
-
-import comet_ml
-import numpy as np
-import tensorflow as tf
-
-from __MODULE_NAME__ import config
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-MODELS_DIR = PROJECT_ROOT / "models"
-MODEL_NAME = "tiny-keras-net"
-
-
-def main() -> None:
-    experiment = comet_ml.Experiment(
-        api_key=config.COMET_API_KEY,
-        workspace=config.COMET_WORKSPACE,
-        project_name=config.COMET_PROJECT_NAME,
-    )
-    try:
-        experiment.log_code(folder=str(PROJECT_ROOT / "src"))
-        experiment.add_tags(["example", "framework=tensorflow"])
-
-        tf.random.set_seed(42)
-        model = tf.keras.Sequential(
-            [
-                tf.keras.layers.Input(shape=(10,)),
-                tf.keras.layers.Dense(16, activation="relu"),
-                tf.keras.layers.Dense(1),
-            ]
-        )
-        model.compile(optimizer=tf.keras.optimizers.SGD(learning_rate=0.01), loss="mse")
-
-        experiment.log_parameters({"lr": 0.01, "optimizer": "SGD", "loss": "mse"})
-
-        x = np.random.randn(32, 10).astype("float32")
-        y = np.random.randn(32, 1).astype("float32")
-
-        loss = model.train_on_batch(x, y)
-        experiment.log_metric("loss", float(loss), step=0)
-
-        # --- Save + log model ---------------------------------------------
-        MODELS_DIR.mkdir(parents=True, exist_ok=True)
-        model_path = MODELS_DIR / f"{MODEL_NAME}.keras"
-        model.save(str(model_path))
-        experiment.log_model(name=MODEL_NAME, file_or_folder=str(model_path))
-
-        # --- Register to Model Registry -----------------------------------
-        # Sets initial status to Development + tag "example".
-        # Use the /promote-model skill to advance status (Staging/QA/Production).
-        experiment.register_model(
-            model_name=MODEL_NAME,
-            status="Development",
-            tags=["example"],
-            description="Tiny 2-layer Keras MLP, single train_on_batch on synthetic data.",
-        )
-    finally:
-        experiment.end()
-
-
-if __name__ == "__main__":
-    main()
-'''
-
-NONE_TRAIN = '''"""Example experiment: mock training loop with full Comet MLOps lifecycle (no ML framework)."""
-import json
-import random
-from pathlib import Path
-
-import comet_ml
-from comet_ml import Artifact
-
-from __MODULE_NAME__ import config
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DATA_DIR = PROJECT_ROOT / "data" / "processed"
-MODELS_DIR = PROJECT_ROOT / "models"
-MODEL_NAME = "mock-model"
-DATASET_NAME = "mock-dataset"
-
-
-def main() -> None:
-    experiment = comet_ml.Experiment(
-        api_key=config.COMET_API_KEY,
-        workspace=config.COMET_WORKSPACE,
-        project_name=config.COMET_PROJECT_NAME,
-    )
-    try:
-        experiment.log_code(folder=str(PROJECT_ROOT / "src"))
-        experiment.add_tags(["example", "framework=none"])
-
-        # --- Stub dataset, logged as Artifact ------------------------------
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        dataset_path = DATA_DIR / "mock-dataset.json"
-        dataset_path.write_text(json.dumps({"size": 1000, "schema": ["x", "y"]}))
-        artifact = Artifact(name=DATASET_NAME, artifact_type="dataset")
-        artifact.add(str(dataset_path))
-        experiment.log_artifact(artifact)
-
-        # --- Mock training loop --------------------------------------------
-        params = {"lr": 0.01, "epochs": 10, "batch_size": 32}
-        experiment.log_parameters(params)
-
-        for epoch in range(params["epochs"]):
-            experiment.log_metric("loss", random.random(), step=epoch)
-            experiment.log_metric("accuracy", random.uniform(0.5, 1.0), step=epoch)
-
-        # --- Save + log a stub model file ---------------------------------
-        MODELS_DIR.mkdir(parents=True, exist_ok=True)
-        model_path = MODELS_DIR / f"{MODEL_NAME}.json"
-        model_path.write_text(json.dumps({"weights": [0.1, 0.2, 0.3]}))
-        experiment.log_model(name=MODEL_NAME, file_or_folder=str(model_path))
-
-        # --- Register to Model Registry -----------------------------------
-        # Sets initial status to Development + tag "example".
-        # Use the /promote-model skill to advance status (Staging/QA/Production).
-        experiment.register_model(
-            model_name=MODEL_NAME,
-            status="Development",
-            tags=["example"],
-            description="Stub model from the no-framework example.",
-        )
-    finally:
-        experiment.end()
-
-
-if __name__ == "__main__":
-    main()
-'''
-
-TRAIN_TEMPLATES = {
-    "sklearn": SKLEARN_TRAIN,
-    "xgboost": XGBOOST_TRAIN,
-    "pytorch": PYTORCH_TRAIN,
-    "tensorflow": TENSORFLOW_TRAIN,
-    "none": NONE_TRAIN,
-}
-
+# scikit-learn + pandas are base deps (dataset.py uses them for every framework).
 FRAMEWORK_DEPS = {
-    "sklearn": ["scikit-learn>=1.4.0", "pandas>=2.0.0", "joblib>=1.3.0"],
-    "xgboost": ["xgboost>=2.0.0", "scikit-learn>=1.4.0", "pandas>=2.0.0"],
-    "pytorch": ["torch>=2.0.0"],
-    "tensorflow": ["tensorflow>=2.15.0"],
+    "sklearn": [],
+    "xgboost": ["xgboost>=2.0.0"],
+    "pytorch": ["torch>=2.2.0"],
+    "tensorflow": ["tensorflow>=2.16.0"],
     "none": [],
 }
 
+# CUDA wheels are several GB; the example runs on CPU.
+TORCH_CPU_INDEX = """
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
 
-def write_train() -> None:
-    """Write the framework-specific train.py with the module name substituted in."""
-    content = TRAIN_TEMPLATES[FRAMEWORK].replace(_MODULE_PLACEHOLDER, MODULE_NAME)
-    TRAIN_PATH.write_text(content)
-
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+"""
 
 _DEP_ANCHOR_RE = re.compile(r'^(?P<indent>[ \t]+)"python-dotenv[^"]*",[ \t]*\r?\n', re.MULTILINE)
 
 
 def append_deps() -> None:
-    """Insert framework deps into pyproject.toml right after the python-dotenv anchor.
-
-    Uses a regex tolerant of indentation, version-pin variations, and CRLF line endings.
-    Inserts after the first match only so a stray comment mentioning python-dotenv
-    elsewhere in the file cannot duplicate the deps.
-    """
+    """Insert framework deps into pyproject.toml right after the python-dotenv anchor."""
     deps = FRAMEWORK_DEPS[FRAMEWORK]
-    if not deps:
-        return
     text = PYPROJECT_PATH.read_text().replace("\r\n", "\n")
-    match = _DEP_ANCHOR_RE.search(text)
-    if not match:
-        print(
-            f"WARNING: could not find python-dotenv dependency anchor in pyproject.toml; "
-            f"add these manually under [project].dependencies: {deps}",
-            file=sys.stderr,
-        )
-        return
-    indent = match.group("indent")
-    insertion = "".join(f'{indent}"{d}",\n' for d in deps)
-    end = match.end()
-    PYPROJECT_PATH.write_text(text[:end] + insertion + text[end:])
+    if deps:
+        match = _DEP_ANCHOR_RE.search(text)
+        if not match:
+            print(
+                f"WARNING: could not find python-dotenv dependency anchor in pyproject.toml; "
+                f"add these manually under [project].dependencies: {deps}",
+                file=sys.stderr,
+            )
+        else:
+            indent = match.group("indent")
+            insertion = "".join(f'{indent}"{d}",\n' for d in deps)
+            text = text[: match.end()] + insertion + text[match.end() :]
+    if FRAMEWORK == "pytorch":
+        text = text.rstrip("\n") + "\n" + TORCH_CPU_INDEX
+    PYPROJECT_PATH.write_text(text)
 
 
 # --- License ------------------------------------------------------------------
 
 MIT_LICENSE = """MIT License
 
-Copyright (c) 2026 {author}
+Copyright (c) {year} {author}
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -484,34 +99,203 @@ APACHE_LICENSE = """                                 Apache License
                            Version 2.0, January 2004
                         http://www.apache.org/licenses/
 
-Copyright 2026 {author}
+   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
 
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
+   1. Definitions.
 
-    http://www.apache.org/licenses/LICENSE-2.0
+      "License" shall mean the terms and conditions for use, reproduction,
+      and distribution as defined by Sections 1 through 9 of this document.
 
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
+      "Licensor" shall mean the copyright owner or entity authorized by
+      the copyright owner that is granting the License.
 
-For the full text of the Apache License 2.0, see:
-    https://www.apache.org/licenses/LICENSE-2.0.txt
+      "Legal Entity" shall mean the union of the acting entity and all
+      other entities that control, are controlled by, or are under common
+      control with that entity. For the purposes of this definition,
+      "control" means (i) the power, direct or indirect, to cause the
+      direction or management of such entity, whether by contract or
+      otherwise, or (ii) ownership of fifty percent (50%) or more of the
+      outstanding shares, or (iii) beneficial ownership of such entity.
+
+      "You" (or "Your") shall mean an individual or Legal Entity
+      exercising permissions granted by this License.
+
+      "Source" form shall mean the preferred form for making modifications,
+      including but not limited to software source code, documentation
+      source, and configuration files.
+
+      "Object" form shall mean any form resulting from mechanical
+      transformation or translation of a Source form, including but
+      not limited to compiled object code, generated documentation,
+      and conversions to other media types.
+
+      "Work" shall mean the work of authorship, whether in Source or
+      Object form, made available under the License, as indicated by a
+      copyright notice that is included in or attached to the work
+      (an example is provided in the Appendix below).
+
+      "Derivative Works" shall mean any work, whether in Source or Object
+      form, that is based on (or derived from) the Work and for which the
+      editorial revisions, annotations, elaborations, or other modifications
+      represent, as a whole, an original work of authorship. For the purposes
+      of this License, Derivative Works shall not include works that remain
+      separable from, or merely link (or bind by name) to the interfaces of,
+      the Work and Derivative Works thereof.
+
+      "Contribution" shall mean any work of authorship, including
+      the original version of the Work and any modifications or additions
+      to that Work or Derivative Works thereof, that is intentionally
+      submitted to Licensor for inclusion in the Work by the copyright owner
+      or by an individual or Legal Entity authorized to submit on behalf of
+      the copyright owner. For the purposes of this definition, "submitted"
+      means any form of electronic, verbal, or written communication sent
+      to the Licensor or its representatives, including but not limited to
+      communication on electronic mailing lists, source code control systems,
+      and issue tracking systems that are managed by, or on behalf of, the
+      Licensor for the purpose of discussing and improving the Work, but
+      excluding communication that is conspicuously marked or otherwise
+      designated in writing by the copyright owner as "Not a Contribution."
+
+      "Contributor" shall mean Licensor and any individual or Legal Entity
+      on behalf of whom a Contribution has been received by Licensor and
+      subsequently incorporated within the Work.
+
+   2. Grant of Copyright License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      copyright license to reproduce, prepare Derivative Works of,
+      publicly display, publicly perform, sublicense, and distribute the
+      Work and such Derivative Works in Source or Object form.
+
+   3. Grant of Patent License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      (except as stated in this section) patent license to make, have made,
+      use, offer to sell, sell, import, and otherwise transfer the Work,
+      where such license applies only to those patent claims licensable
+      by such Contributor that are necessarily infringed by their
+      Contribution(s) alone or by combination of their Contribution(s)
+      with the Work to which such Contribution(s) was submitted. If You
+      institute patent litigation against any entity (including a
+      cross-claim or counterclaim in a lawsuit) alleging that the Work
+      or a Contribution incorporated within the Work constitutes direct
+      or contributory patent infringement, then any patent licenses
+      granted to You under this License for that Work shall terminate
+      as of the date such litigation is filed.
+
+   4. Redistribution. You may reproduce and distribute copies of the
+      Work or Derivative Works thereof in any medium, with or without
+      modifications, and in Source or Object form, provided that You
+      meet the following conditions:
+
+      (a) You must give any other recipients of the Work or
+          Derivative Works a copy of this License; and
+
+      (b) You must cause any modified files to carry prominent notices
+          stating that You changed the files; and
+
+      (c) You must retain, in the Source form of any Derivative Works
+          that You distribute, all copyright, patent, trademark, and
+          attribution notices from the Source form of the Work,
+          excluding those notices that do not pertain to any part of
+          the Derivative Works; and
+
+      (d) If the Work includes a "NOTICE" text file as part of its
+          distribution, then any Derivative Works that You distribute must
+          include a readable copy of the attribution notices contained
+          within such NOTICE file, excluding those notices that do not
+          pertain to any part of the Derivative Works, in at least one
+          of the following places: within a NOTICE text file distributed
+          as part of the Derivative Works; within the Source form or
+          documentation, if provided along with the Derivative Works; or,
+          within a display generated by the Derivative Works, if and
+          wherever such third-party notices normally appear. The contents
+          of the NOTICE file are for informational purposes only and
+          do not modify the License. You may add Your own attribution
+          notices within Derivative Works that You distribute, alongside
+          or as an addendum to the NOTICE text from the Work, provided
+          that such additional attribution notices cannot be construed
+          as modifying the License.
+
+      You may add Your own copyright statement to Your modifications and
+      may provide additional or different license terms and conditions
+      for use, reproduction, or distribution of Your modifications, or
+      for any such Derivative Works as a whole, provided Your use,
+      reproduction, and distribution of the Work otherwise complies with
+      the conditions stated in this License.
+
+   5. Submission of Contributions. Unless You explicitly state otherwise,
+      any Contribution intentionally submitted for inclusion in the Work
+      by You to the Licensor shall be under the terms and conditions of
+      this License, without any additional terms or conditions.
+      Notwithstanding the above, nothing herein shall supersede or modify
+      the terms of any separate license agreement you may have executed
+      with Licensor regarding such Contributions.
+
+   6. Trademarks. This License does not grant permission to use the trade
+      names, trademarks, service marks, or product names of the Licensor,
+      except as required for reasonable and customary use in describing the
+      origin of the Work and reproducing the content of the NOTICE file.
+
+   7. Disclaimer of Warranty. Unless required by applicable law or
+      agreed to in writing, Licensor provides the Work (and each
+      Contributor provides its Contributions) on an "AS IS" BASIS,
+      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+      implied, including, without limitation, any warranties or conditions
+      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
+      PARTICULAR PURPOSE. You are solely responsible for determining the
+      appropriateness of using or redistributing the Work and assume any
+      risks associated with Your exercise of permissions under this License.
+
+   8. Limitation of Liability. In no event and under no legal theory,
+      whether in tort (including negligence), contract, or otherwise,
+      unless required by applicable law (such as deliberate and grossly
+      negligent acts) or agreed to in writing, shall any Contributor be
+      liable to You for damages, including any direct, indirect, special,
+      incidental, or consequential damages of any character arising as a
+      result of this License or out of the use or inability to use the
+      Work (including but not limited to damages for loss of goodwill,
+      work stoppage, computer failure or malfunction, or any and all
+      other commercial damages or losses), even if such Contributor
+      has been advised of the possibility of such damages.
+
+   9. Accepting Warranty or Additional Liability. While redistributing
+      the Work or Derivative Works thereof, You may choose to offer,
+      and charge a fee for, acceptance of support, warranty, indemnity,
+      or other liability obligations and/or rights consistent with this
+      License. However, in accepting such obligations, You may act only
+      on Your own behalf and on Your sole responsibility, not on behalf
+      of any other Contributor, and only if You agree to indemnify,
+      defend, and hold each Contributor harmless for any liability
+      incurred by, or claims asserted against, such Contributor by reason
+      of your accepting any such warranty or additional liability.
+
+   END OF TERMS AND CONDITIONS
+
+   Copyright {year} {author}
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
 """
 
 
 def write_license() -> None:
+    year = date.today().year
     if LICENSE == "MIT":
-        LICENSE_PATH.write_text(MIT_LICENSE.format(author=AUTHOR_NAME))
+        LICENSE_PATH.write_text(MIT_LICENSE.format(year=year, author=AUTHOR_NAME))
     elif LICENSE == "Apache-2.0":
-        LICENSE_PATH.write_text(APACHE_LICENSE.format(author=AUTHOR_NAME))
-    else:
-        # Proprietary or None: remove the placeholder LICENSE file.
-        if LICENSE_PATH.exists():
-            LICENSE_PATH.unlink()
+        LICENSE_PATH.write_text(APACHE_LICENSE.format(year=year, author=AUTHOR_NAME))
+    elif LICENSE_PATH.exists():  # Proprietary or None: remove the placeholder LICENSE file.
+        LICENSE_PATH.unlink()
 
 
 # --- Git init -----------------------------------------------------------------
@@ -538,10 +322,10 @@ def banner() -> None:
             cd {REPO_NAME}
             uv sync
             cp .env.example .env       # fill in COMET_API_KEY / COMET_WORKSPACE
-            make train                 # run the example experiment
+            make train                 # builds the dataset, then runs one experiment
 
-        See AGENT.md for an agentic-tool briefing and .claude/ for
-        Claude Code rules and skills.
+        See AGENTS.md for the agent briefing and .claude/ for Claude Code
+        settings, rules and skills.
         ============================================================
         """
     ).strip()
@@ -549,7 +333,6 @@ def banner() -> None:
 
 
 def main() -> None:
-    write_train()
     append_deps()
     write_license()
     git_init()

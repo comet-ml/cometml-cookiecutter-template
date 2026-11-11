@@ -37,14 +37,16 @@ def test_experiment_name_follows_convention():
     assert name.startswith(f"{config.COMET_PROJECT_NAME}-iris-classifier-")
 
 
-def test_thresholds_gate_every_listed_metric(tmp_path):
+def test_failing_thresholds_checks_every_listed_metric(tmp_path):
     path = tmp_path / "thresholds.yaml"
     path.write_text('val_accuracy: ">=0.9"\ntrain_loss: "<=0.5"\n')
-    assert config.gate_passes({"val_accuracy": 0.95, "train_loss": 0.2}, path=path) == []
-    failing = config.gate_passes({"val_accuracy": 0.95, "train_loss": 0.9}, path=path)
+    passing = {"val_accuracy": 0.95, "train_loss": 0.2}
+    assert config.failing_thresholds(passing, path=path) == []
+    failing = config.failing_thresholds({"val_accuracy": 0.95, "train_loss": 0.9}, path=path)
     assert failing == ["train_loss"]
-    assert config.gate_passes({"val_accuracy": 0.95}, path=path) == ["train_loss"]  # missing = fail
-    assert config.gate_passes({"anything": 1.0}, path=tmp_path / "absent.yaml") == []
+    missing = {"val_accuracy": 0.95}
+    assert config.failing_thresholds(missing, path=path) == ["train_loss"]
+    assert config.failing_thresholds({"anything": 1.0}, path=tmp_path / "absent.yaml") == []
 
 
 def test_bump_patch():
@@ -60,8 +62,7 @@ def test_dataset_build_writes_train_and_test_csv(tmp_path):
 
 
 def test_train_logs_per_epoch_and_returns_val_accuracy(tmp_path):
-    dataset.build(tmp_path)
-    data = train.load_data(tmp_path)
+    data = train.load_data(tmp_path)  # builds the CSVs on first use
     experiment = StubExperiment()
 
     model, metrics = train.train(experiment, train.DEFAULT_PARAMS, data)
@@ -74,12 +75,11 @@ def test_train_logs_per_epoch_and_returns_val_accuracy(tmp_path):
 
 
 def test_saved_model_round_trips_with_its_preprocessing(tmp_path):
-    dataset.build(tmp_path)
     data = train.load_data(tmp_path)
     model, metrics = train.train(StubExperiment(), train.DEFAULT_PARAMS, data)
 
     train.save_model(model, tmp_path / "model")
     loaded = predict.load_from_dir(tmp_path / "model")
 
-    y_pred = predict.predict(loaded, data.X_val)
+    y_pred = train.predict(loaded, data.X_val)
     assert train.accuracy(data.y_val, y_pred) == metrics["val_accuracy"]

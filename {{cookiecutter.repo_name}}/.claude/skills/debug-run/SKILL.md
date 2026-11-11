@@ -6,15 +6,15 @@ argument-hint: "<experiment-id | latest>"
 
 # Debug Run
 
-Depends on: Comet MCP server (`mcp__comet-mcp__*`, needs `COMET_API_KEY` / `COMET_WORKSPACE` exported
-in the shell), `.env` for `COMET_WORKSPACE` / `COMET_PROJECT_NAME`.
+Depends on: Comet MCP server (setup, workspace/project rule, tool table, SDK fallback: `AGENTS.md` >
+"Comet MCP server").
 
 Read-only. Nothing here changes the experiment or the code.
 
 ## Procedure
 
 1. Resolve `latest` with `list_experiments(workspace, project_name, page_size=1, sort_by="startTime",
-   sort_order="desc")`; always pass both from `.env`.
+   sort_order="desc")`.
 2. Pull, in parallel:
    - `get_experiment_details(id)`: name, tags, duration, whether it ended cleanly.
    - `get_experiment_output(id)`: the captured stdout/stderr. Tracebacks, `COMET WARNING` lines and the

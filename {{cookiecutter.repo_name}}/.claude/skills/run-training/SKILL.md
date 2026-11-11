@@ -10,7 +10,7 @@ disable-model-invocation: true
 Depends on: `make train` (`src/<module>/train.py`), `make data`, `thresholds.yaml`, `.env` with
 `COMET_API_KEY` / `COMET_WORKSPACE`.
 
-Run one experiment and present a clean summary. `make train` builds the dataset CSVs first if they are
+Run one experiment and present a clean summary. `make train` builds the dataset CSVs if they are
 missing, logs per-epoch metrics, a confusion matrix and the model, and registers a new patch version
 only when `thresholds.yaml` passes (or `--register` is given).
 
@@ -19,8 +19,7 @@ only when `thresholds.yaml` passes (or `--register` is given).
 1. A key must be available: `COMET_API_KEY` in `.env` or the shell, or `api_key` in `~/.comet.config`.
    Check without printing it: `grep -qE '^COMET_API_KEY=.+' .env 2>/dev/null || [ -n "$COMET_API_KEY" ] || grep -q api_key ~/.comet.config 2>/dev/null && echo set || echo missing`.
    If missing: tell the user to `cp .env.example .env` and fill it in; stop.
-2. Training reads `.env` itself (`config.py` loads it). The shell environment only matters for the
-   MCP server, so do not ask the user to export anything here.
+2. Training reads `.env` itself; no shell export needed (that is only for the MCP server).
 3. Confirm the user wants a **new** experiment. Each run costs compute and creates a Comet experiment.
 
 ## Procedure
@@ -50,8 +49,8 @@ summary: name=demo-iris-classifier-20261111-1430 dataset=iris-dataset:1.0.0 trai
 - `name`: the experiment name. The URL is on the `COMET INFO: Experiment is live on comet.com <url>` line.
 - `dataset`: the Artifact version used (`local` when `make data` has not run online).
 - The metrics are **final** values (the Comet summary block above it prints min/max, not final).
-- `registered`: the new version, `none` (gate failed; the `not registered: ...` line says which
-  metric), or `FAILED` (the SDK rejected the registration and the script exited non-zero).
+- `registered`: the new version, or `none` (gate failed; the `not registered: ...` line says which
+  metric). A registration the backend rejects raises, so the run exits non-zero before this line.
 
 ### 4. Summary
 

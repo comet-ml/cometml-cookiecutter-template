@@ -1,8 +1,9 @@
 """Example experiment: {{ cookiecutter.framework }} classifier on iris with the full Comet lifecycle.
 
-Shape (the same for every framework so the sweep, tests and skills can rely on it):
-    load_data(data_dir) -> Data                      # raw features from the CSVs of `make data`
+Shape (the same for every framework so the sweep, tests, predict.py and the skills rely on it):
+    load_data(data_dir) -> Data                      # raw features; builds the CSVs if missing
     train(experiment, params, data) -> (model, metrics)
+    predict(model, X) -> labels
     save_model(model, dir) -> Path                   # everything predict.load_from_dir needs
     main(argv)                                        # start experiment, train, log model, register
 
@@ -15,17 +16,32 @@ from __future__ import annotations
 
 import argparse
 import re
-import subprocess
 import sys
 from pathlib import Path
 from typing import NamedTuple
 
 import comet_ml
+{%- if cookiecutter.framework == "sklearn" %}
+import joblib
+{%- endif %}
 import numpy as np
 import pandas as pd
+{%- if cookiecutter.framework == "sklearn" %}
+from sklearn.linear_model import SGDClassifier
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+{%- elif cookiecutter.framework == "tensorflow" %}
+import tensorflow as tf
+{%- elif cookiecutter.framework == "pytorch" %}
+import torch
+from torch import nn
+{%- elif cookiecutter.framework == "xgboost" %}
+import xgboost as xgb
+{%- endif %}
 
-from {{ cookiecutter.module_name }} import config, dataset
+from {{ cookiecutter.module_name }} import config, dataset, registry
 
+FRAMEWORK = "{{ cookiecutter.framework }}"
 MODEL_NAME = "iris-classifier"
 LABELS = ["setosa", "versicolor", "virginica"]
 {%- if cookiecutter.framework == "sklearn" %}
@@ -53,8 +69,10 @@ class Data(NamedTuple):
     y_val: np.ndarray
 
 
-def load_data(data_dir=config.DATA_DIR) -> Data:
-    """Read the train/test CSVs written by `make data`. Raw features; models scale internally."""
+def load_data(data_dir: Path = config.DATA_DIR) -> Data:
+    """Read the train/test CSVs, building them first when absent. Raw features."""
+    if not all((data_dir / f).exists() for f in (dataset.TRAIN_CSV, dataset.TEST_CSV)):
+        dataset.build(data_dir)
     train_df = pd.read_csv(data_dir / dataset.TRAIN_CSV)
     test_df = pd.read_csv(data_dir / dataset.TEST_CSV)
     return Data(
@@ -69,21 +87,23 @@ def accuracy(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     return float((y_true == y_pred).mean())
 
 
-def _finish(experiment, model, data: Data, metrics: dict, predict_fn) -> tuple:
-    y_pred = predict_fn(model, data.X_val)
-    experiment.log_confusion_matrix(y_true=data.y_val, y_predicted=y_pred, labels=LABELS)
-    return model, metrics
+def save_model(model, model_dir: Path) -> Path:
+    """Write the model (with its preprocessing) to `model_dir / MODEL_FILE` and return the path."""
+    model_dir.mkdir(parents=True, exist_ok=True)
+    path = model_dir / MODEL_FILE
+    _dump(model, path)
+    return path
 
 
 {%- if cookiecutter.framework == "sklearn" %}
 
 
+def predict(model, X: np.ndarray) -> np.ndarray:
+    return model.predict(X)
+
+
 def train(experiment, params: dict, data: Data):
     """StandardScaler + SGDClassifier, one `partial_fit` pass per epoch; saved as one Pipeline."""
-    from sklearn.linear_model import SGDClassifier
-    from sklearn.pipeline import Pipeline
-    from sklearn.preprocessing import StandardScaler
-
     experiment.log_parameters(params)
     scaler = StandardScaler().fit(data.X_train)
     clf = SGDClassifier(
@@ -103,23 +123,22 @@ def train(experiment, params: dict, data: Data):
             "val_accuracy": accuracy(data.y_val, clf.predict(X_val)),
         }
         experiment.log_metrics(metrics, epoch=epoch)
-    return _finish(experiment, model, data, metrics, lambda m, X: m.predict(X))
+    y_pred = predict(model, data.X_val)
+    experiment.log_confusion_matrix(y_true=data.y_val, y_predicted=y_pred, labels=LABELS)
+    return model, metrics
 
 
-def save_model(model, model_dir: Path) -> Path:
-    import joblib
-
-    model_dir.mkdir(parents=True, exist_ok=True)
-    path = model_dir / MODEL_FILE
+def _dump(model, path: Path) -> None:
     joblib.dump(model, path)
-    return path
 {%- elif cookiecutter.framework == "xgboost" %}
+
+
+def predict(model, X: np.ndarray) -> np.ndarray:
+    return model.predict(X)
 
 
 def train(experiment, params: dict, data: Data):
     """XGBClassifier grown `trees_per_epoch` trees per epoch via continued boosting; no scaling."""
-    import xgboost as xgb
-
     experiment.log_parameters(params)
     model = None
     for epoch in range(params["epochs"]):
@@ -134,65 +153,50 @@ def train(experiment, params: dict, data: Data):
         booster.fit(data.X_train, data.y_train, xgb_model=previous)
         model = booster
         metrics = {
-            "train_accuracy": accuracy(data.y_train, model.predict(data.X_train)),
-            "val_accuracy": accuracy(data.y_val, model.predict(data.X_val)),
+            "train_accuracy": accuracy(data.y_train, predict(model, data.X_train)),
+            "val_accuracy": accuracy(data.y_val, predict(model, data.X_val)),
         }
         experiment.log_metrics(metrics, epoch=epoch)
-    return _finish(experiment, model, data, metrics, lambda m, X: m.predict(X))
+    y_pred = predict(model, data.X_val)
+    experiment.log_confusion_matrix(y_true=data.y_val, y_predicted=y_pred, labels=LABELS)
+    return model, metrics
 
 
-def save_model(model, model_dir: Path) -> Path:
-    model_dir.mkdir(parents=True, exist_ok=True)
-    path = model_dir / MODEL_FILE
+def _dump(model, path: Path) -> None:
     model.save_model(str(path))
-    return path
 {%- elif cookiecutter.framework == "pytorch" %}
 
 
-def standardize_cls():
-    """Scaling as a module with buffers, so the stats travel inside the state_dict."""
-    import torch
-    from torch import nn
+class Standardize(nn.Module):
+    """Scaling as a layer, so the stats travel inside the state_dict."""
 
-    class Standardize(nn.Module):
-        def __init__(self, n_features: int):
-            super().__init__()
-            self.register_buffer("mean", torch.zeros(n_features))
-            self.register_buffer("std", torch.ones(n_features))
+    def __init__(self, n_features: int):
+        super().__init__()
+        self.register_buffer("mean", torch.zeros(n_features))
+        self.register_buffer("std", torch.ones(n_features))
 
-        def fit(self, X: torch.Tensor) -> None:
-            self.mean.copy_(X.mean(0))
-            self.std.copy_(X.std(0) + 1e-8)
+    def fit(self, X: torch.Tensor) -> None:
+        self.mean.copy_(X.mean(0))
+        self.std.copy_(X.std(0) + 1e-8)
 
-        def forward(self, X: torch.Tensor) -> torch.Tensor:
-            return (X - self.mean) / self.std
-
-    return Standardize
+    def forward(self, X: torch.Tensor) -> torch.Tensor:
+        return (X - self.mean) / self.std
 
 
-def build_model(hidden_size: int):
-    """Standardize -> Linear -> ReLU -> Linear."""
-    from torch import nn
-
-    standardize = standardize_cls()
+def build_model(hidden_size: int) -> nn.Sequential:
     return nn.Sequential(
-        standardize(4), nn.Linear(4, hidden_size), nn.ReLU(), nn.Linear(hidden_size, len(LABELS))
+        Standardize(4), nn.Linear(4, hidden_size), nn.ReLU(), nn.Linear(hidden_size, len(LABELS))
     )
 
 
-def _predict(model, X: np.ndarray) -> np.ndarray:
-    import torch
-
+def predict(model, X: np.ndarray) -> np.ndarray:
     model.eval()
     with torch.no_grad():
         return model(torch.from_numpy(np.ascontiguousarray(X))).argmax(1).numpy()
 
 
 def train(experiment, params: dict, data: Data):
-    """Two-layer MLP with a standardization front layer, full-batch Adam, one step per epoch."""
-    import torch
-    from torch import nn
-
+    """Two-layer MLP behind a Standardize layer, full-batch Adam, one step per epoch."""
     experiment.log_parameters(params)
     torch.manual_seed(params["seed"])
     model = build_model(params["hidden_size"])
@@ -208,32 +212,26 @@ def train(experiment, params: dict, data: Data):
         optimizer.step()
         metrics = {
             "train_loss": loss.item(),
-            "train_accuracy": accuracy(data.y_train, _predict(model, data.X_train)),
-            "val_accuracy": accuracy(data.y_val, _predict(model, data.X_val)),
+            "train_accuracy": accuracy(data.y_train, predict(model, data.X_train)),
+            "val_accuracy": accuracy(data.y_val, predict(model, data.X_val)),
         }
         experiment.log_metrics(metrics, epoch=epoch)
-    return _finish(experiment, model, data, metrics, _predict)
+    y_pred = predict(model, data.X_val)
+    experiment.log_confusion_matrix(y_true=data.y_val, y_predicted=y_pred, labels=LABELS)
+    return model, metrics
 
 
-def save_model(model, model_dir: Path) -> Path:
-    """state_dict only (weights + scaling buffers); predict rebuilds the module from its shapes."""
-    import torch
-
-    model_dir.mkdir(parents=True, exist_ok=True)
-    path = model_dir / MODEL_FILE
-    torch.save(model.state_dict(), path)
-    return path
+def _dump(model, path: Path) -> None:
+    torch.save(model.state_dict(), path)  # weights + scaling buffers; predict rebuilds the module
 {%- elif cookiecutter.framework == "tensorflow" %}
 
 
-def _predict(model, X: np.ndarray) -> np.ndarray:
+def predict(model, X: np.ndarray) -> np.ndarray:
     return model.predict(X, verbose=0).argmax(1)
 
 
 def train(experiment, params: dict, data: Data):
     """Normalization layer + two Dense layers; one `fit(epochs=1)` per loop for uniform logging."""
-    import tensorflow as tf
-
     experiment.log_parameters(params)
     tf.random.set_seed(params["seed"])
     norm = tf.keras.layers.Normalization(axis=-1)
@@ -254,18 +252,17 @@ def train(experiment, params: dict, data: Data):
         history = model.fit(data.X_train, data.y_train, epochs=1, verbose=0)
         metrics = {
             "train_loss": float(history.history["loss"][0]),
-            "train_accuracy": accuracy(data.y_train, _predict(model, data.X_train)),
-            "val_accuracy": accuracy(data.y_val, _predict(model, data.X_val)),
+            "train_accuracy": accuracy(data.y_train, predict(model, data.X_train)),
+            "val_accuracy": accuracy(data.y_val, predict(model, data.X_val)),
         }
         experiment.log_metrics(metrics, epoch=epoch)
-    return _finish(experiment, model, data, metrics, _predict)
+    y_pred = predict(model, data.X_val)
+    experiment.log_confusion_matrix(y_true=data.y_val, y_predicted=y_pred, labels=LABELS)
+    return model, metrics
 
 
-def save_model(model, model_dir: Path) -> Path:
-    model_dir.mkdir(parents=True, exist_ok=True)
-    path = model_dir / MODEL_FILE
+def _dump(model, path: Path) -> None:
     model.save(str(path))
-    return path
 {%- else %}
 
 
@@ -275,9 +272,9 @@ def softmax(z: np.ndarray) -> np.ndarray:
     return e / e.sum(axis=1, keepdims=True)
 
 
-def predict(weights: dict, X: np.ndarray) -> np.ndarray:
-    Xs = (X - weights["mean"]) / weights["std"]
-    return (Xs @ weights["W"] + weights["b"]).argmax(axis=1)
+def predict(model: dict, X: np.ndarray) -> np.ndarray:
+    Xs = (X - model["mean"]) / model["std"]
+    return (Xs @ model["W"] + model["b"]).argmax(axis=1)
 
 
 def train(experiment, params: dict, data: Data):
@@ -285,35 +282,34 @@ def train(experiment, params: dict, data: Data):
     experiment.log_parameters(params)
     rng = np.random.default_rng(params["seed"])
     n_features, n_classes = data.X_train.shape[1], len(LABELS)
-    weights = {
+    model = {
         "mean": data.X_train.mean(axis=0),
         "std": data.X_train.std(axis=0) + 1e-8,
         "W": rng.normal(scale=0.01, size=(n_features, n_classes)),
         "b": np.zeros(n_classes),
     }
-    Xs = (data.X_train - weights["mean"]) / weights["std"]
+    Xs = (data.X_train - model["mean"]) / model["std"]
     onehot = np.eye(n_classes)[data.y_train]
     for epoch in range(params["epochs"]):
-        probs = softmax(Xs @ weights["W"] + weights["b"])
+        probs = softmax(Xs @ model["W"] + model["b"])
         grad = probs - onehot
-        weights["W"] -= params["learning_rate"] * Xs.T @ grad / len(onehot)
-        weights["b"] -= params["learning_rate"] * grad.mean(axis=0)
+        model["W"] -= params["learning_rate"] * Xs.T @ grad / len(onehot)
+        model["b"] -= params["learning_rate"] * grad.mean(axis=0)
         metrics = {
             "train_loss": float(
                 -np.log(probs[np.arange(len(onehot)), data.y_train] + 1e-12).mean()
             ),
-            "train_accuracy": accuracy(data.y_train, predict(weights, data.X_train)),
-            "val_accuracy": accuracy(data.y_val, predict(weights, data.X_val)),
+            "train_accuracy": accuracy(data.y_train, predict(model, data.X_train)),
+            "val_accuracy": accuracy(data.y_val, predict(model, data.X_val)),
         }
         experiment.log_metrics(metrics, epoch=epoch)
-    return _finish(experiment, weights, data, metrics, predict)
+    y_pred = predict(model, data.X_val)
+    experiment.log_confusion_matrix(y_true=data.y_val, y_predicted=y_pred, labels=LABELS)
+    return model, metrics
 
 
-def save_model(model, model_dir: Path) -> Path:
-    model_dir.mkdir(parents=True, exist_ok=True)
-    path = model_dir / MODEL_FILE
+def _dump(model, path: Path) -> None:
     np.savez(path, **model)
-    return path
 {%- endif %}
 
 
@@ -327,23 +323,6 @@ def bump_patch(version: str | None) -> str:
         return "1.0.0"
     major, minor, patch = match.groups()
     return f"{major}.{minor}.{int(patch) + 1}"
-
-
-def next_version(api: comet_ml.API, workspace: str) -> str:
-    """Next patch after the latest registered version; `1.0.0` when the model is not registered."""
-    if MODEL_NAME not in api.get_registry_model_names(workspace):
-        return "1.0.0"
-    versions = api.get_model(workspace, MODEL_NAME).find_versions()
-    return bump_patch(versions[0] if versions else None)
-
-
-def git_sha() -> str:
-    try:
-        return subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"], text=True, stderr=subprocess.DEVNULL
-        ).strip()
-    except Exception:
-        return "unknown"
 
 
 def parse_args(argv=None) -> argparse.Namespace:
@@ -364,53 +343,47 @@ def main(argv=None) -> None:
         project_name=config.COMET_PROJECT_NAME,
         experiment_config=comet_ml.ExperimentConfig(
             name=config.experiment_name(MODEL_NAME),
-            tags=["example", "framework={{ cookiecutter.framework }}"],
+            tags=["example", f"framework={FRAMEWORK}"],
             auto_metric_logging=False,  # the loop logs train/val metrics itself
         ),
     )
-    name = experiment.get_name()
-    offline = isinstance(experiment, comet_ml.OfflineExperiment)
-    version = workspace = None
     try:
         dataset_version = dataset.record_lineage(experiment)
         model, metrics = train(experiment, params, data)
         experiment.log_model(MODEL_NAME, str(save_model(model, config.MODELS_DIR / MODEL_NAME)))
-
-        failing = config.gate_passes(metrics)
-        if offline:
-            print("offline run: model logged to the archive, not registered")
-        elif args.register or not failing:
-            api = comet_ml.API()
-            workspace = config.COMET_WORKSPACE or api.get_default_workspace()
-            version = args.version or next_version(api, workspace)
-            experiment.register_model(
-                MODEL_NAME,
-                version=version,
-                status="Development",
-                tags=["example"],
-                metadata={
-                    "dataset_version": dataset_version,
-                    "git_sha": git_sha(),
-                    **{k: round(metrics[k], 4) for k in config.thresholds() if k in metrics},
-                },
-            )
-        else:
-            print(f"not registered: {', '.join(failing)} failed thresholds.yaml")
     finally:
-        experiment.end()  # registration is sent here; a rejected one is only logged by the SDK
+        experiment.end()
 
-    registered = "none"
-    if version:
-        model_api = comet_ml.API().get_model(workspace, MODEL_NAME)
-        known = model_api.find_versions(version_prefix=version)
-        registered = version if version in known else "FAILED"
+    failing = config.failing_thresholds(metrics)
+    version = None
+    if isinstance(experiment, comet_ml.OfflineExperiment):
+        print("offline run: model logged to the archive, not registered")
+    elif args.register or not failing:
+        # The REST path registers synchronously and raises when the backend rejects the version.
+        api = comet_ml.API()
+        ws = registry.workspace(api)
+        existing = registry.model_or_none(api, ws, MODEL_NAME)
+        versions = existing.find_versions() if existing else []
+        version = args.version or bump_patch(versions[0] if versions else None)
+        rounded = {k: round(v, 4) for k, v in metrics.items()}
+        api_experiment = api.get_experiment_by_key(experiment.get_key())
+        if api_experiment is None:
+            sys.exit(f"model logged, not registered: experiment {experiment.get_key()} not found")
+        api_experiment.register_model(
+            MODEL_NAME,
+            version=version,
+            status="Development",
+            tags=["example"],
+            metadata={"dataset_version": dataset_version, **rounded},
+        )
+    else:
+        print(f"not registered: {', '.join(failing)} failed thresholds.yaml")
+
     print(
-        f"summary: name={name} dataset=iris-dataset:{dataset_version} "
+        f"summary: name={experiment.get_name()} dataset=iris-dataset:{dataset_version} "
         + " ".join(f"{k}={v:.4f}" for k, v in sorted(metrics.items()))
-        + f" registered={registered}"
+        + f" registered={version or 'none'}"
     )
-    if registered == "FAILED":
-        sys.exit(f"registration of {MODEL_NAME} {version} was rejected; see the COMET ERROR above")
 
 
 if __name__ == "__main__":

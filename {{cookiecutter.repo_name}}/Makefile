@@ -31,17 +31,13 @@ test:
 data:
 	uv run python -m $(MODULE).dataset $(ARGS)
 
-# Prerequisite for train/sweep/predict: build the CSVs without ARGS and without Comet.
-data/processed/iris-train.csv:
-	uv run python -m $(MODULE).dataset --no-artifact
-
-train: data/processed/iris-train.csv
+train:
 	uv run python -m $(MODULE).train $(ARGS)
 
-sweep: data/processed/iris-train.csv
+sweep:
 	uv run python -m $(MODULE).sweep $(ARGS)
 
-predict: data/processed/iris-train.csv
+predict:
 	uv run python -m $(MODULE).predict $(ARGS)
 
 clean:

@@ -55,14 +55,7 @@ Propose `[Unreleased]` lines for `CHANGELOG.md` based on the current branch's di
 
    Do **not** run `git add` automatically.
 
-## Releasing a version
-
-When the user says "cut version X.Y.Z":
-
-1. Replace `## [Unreleased]` heading with `## [X.Y.Z] - YYYY-MM-DD` (today's date).
-2. Insert a fresh empty `## [Unreleased]` block at the top of the version history.
-3. Bump `version` in `pyproject.toml` and `__version__` in `src/<module>/__init__.py`.
-4. Show the diff. User commits and tags (`git tag vX.Y.Z`).
+Format, style and the release steps: `.claude/rules/changelog-discipline.md`.
 
 ## Anti-patterns
 

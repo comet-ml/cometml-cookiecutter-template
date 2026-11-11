@@ -7,18 +7,17 @@ conventions. Docs: <https://www.comet.com/docs/v2/api-and-sdk/python-sdk/referen
 ## Registering from a run
 
 ```python
-experiment.register_model(
+api.get_experiment_by_key(key).register_model(   # synchronous; raises when the backend rejects it
     "iris-classifier",            # registry name, workspace-unique
-    version="1.0.3",              # semver; defaults to "1.0.0" and a duplicate is rejected at end()
+    version="1.0.3",              # semver; defaults to "1.0.0", duplicates are rejected
     status="Development",         # one of the workspace's allowed statuses
     tags=["example"],
-    metadata={"dataset_version": "1.0.0", "val_accuracy": 0.97, "git_sha": "abc1234"},
+    metadata={"dataset_version": "1.0.0", "val_accuracy": 0.97},
 )
 ```
 
-The model must have been logged to the same experiment first (`experiment.log_model(name, path)` or a
-`comet_ml.integration.<framework>.log_model`). `train.py` picks the next patch version with
-`bump_patch(model.find_versions()[0])`.
+The model must have been logged to that experiment first (`experiment.log_model(name, path)`).
+`experiment.register_model(...)` also exists but only logs a rejection (even `sync=True` just waits). `train.py` picks the next patch version with `bump_patch(model.find_versions()[0])`.
 
 ## Reading and mutating after registration
 

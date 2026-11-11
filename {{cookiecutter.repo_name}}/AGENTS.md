@@ -13,9 +13,7 @@ other agents (Codex, Cursor, Aider) read it directly.
 - **Experiment tracking**: [Comet EM](https://www.comet.com/docs/v2/) via the `comet-ml` SDK
 - **ML framework**: {{ cookiecutter.framework }}
 - **Layout**: `src/` layout, package `{{ cookiecutter.module_name }}`
-- **Agent access to Comet**: `.mcp.json` registers the [Comet MCP server](https://www.comet.com/docs/v2/api-and-sdk/mcp-server/overview/)
-  (read-only: experiments, metrics, projects; **no registry access**). It needs `COMET_API_KEY` and
-  `COMET_WORKSPACE` exported in the shell before launch: `set -a && source .env && set +a`.
+- **Agent access to Comet**: the Comet MCP server, see the section below.
 
 ## Layout
 
@@ -44,16 +42,12 @@ make predict    # predict with the Production registry version
 make lint test  # ruff + credential-free pytest
 ```
 
-## The lifecycle, in one paragraph
+## The lifecycle
 
-`make data` writes `data/processed/iris-*.csv` and logs them once as Artifact `iris-dataset`.
-`make train` starts an experiment with `comet_ml.start()`, named `{project}-{model}-{YYYYMMDD}-{HHmm}`,
-records which Artifact version it read, logs `train_*` / `val_*` per epoch plus a confusion matrix, logs
-the model, and registers the next patch version with `status="Development"` only when `thresholds.yaml`
-passes. `/promote-model` moves a version through Staging / QA / Production (and demotes the old holder).
-A status change fires the registry webhook, which starts `deploy-model.yml`; `make predict` is what that
-workflow runs to fetch and smoke-test the version. The full rules live in
-`.claude/rules/comet-em-best-practices.md`.
+`make data -> make train -> make sweep -> /promote-model -> webhook -> deploy-model.yml -> make predict`.
+The README's "Lifecycle" table says what each step does in Comet; `.claude/rules/comet-em-best-practices.md`
+holds the conventions behind it. `train.py` ends with one `summary:` line
+(`name=... dataset=iris-dataset:<v> <metric>=<final> ... registered=<version|none>`) that the skills read.
 
 ## Credentials
 
@@ -65,6 +59,48 @@ workflow runs to fetch and smoke-test the version. The full rules live in
 
 - `CHANGELOG.md` under `## [Unreleased]` when `src/` changed (`.claude/rules/changelog-discipline.md`).
 - `make lint && make test`. `uv run pre-commit install` once per clone runs ruff and nbstripout.
+
+## Comet MCP server
+
+`.mcp.json` registers [`comet-mcp`](https://www.comet.com/docs/v2/api-and-sdk/mcp-server/overview/) and
+`.claude/settings.json` pre-approves it; tools appear as `mcp__comet-mcp__<tool>`. The server reads
+experiments only: no registry reads or writes (use `scripts/registry_mutate.py`), no experiment creation.
+
+- It reads `COMET_API_KEY` / `COMET_WORKSPACE` from the **shell**, not from `.env`: launch Claude Code
+  after `set -a && source .env && set +a` (or use direnv). Training and the scripts load `.env`
+  themselves, so this only matters for the server.
+- Always pass `workspace=` and `project_name=` from `.env`; without them the server queries the
+  account's default workspace and project `general`.
+
+| Need | Tool |
+|------|------|
+| Latest runs | `list_experiments(workspace, project_name, page_size=N, sort_by="startTime", sort_order="desc")` |
+| Final and best metric values | `get_experiment_summary(experiment_id)` ("best" is the max, wrong for losses) |
+| Curves | `get_experiment_training_progress(experiment_id, metric_names)` / `get_experiment_metric_data(experiment_ids, metric_names, x_axis)` |
+| Hyperparameters, tags, URL | `get_experiment_parameters`, `get_experiment_details` |
+| Runs by tag / by metric | `find_tagged_experiments(tag, ...)`, `query_experiments(name, comparison, value, ...)` |
+| Many runs at once | `experiment_spreadsheet(workspace, project_name, experiment_keys)` (CSV) |
+| Why a run failed | `get_experiment_output(experiment_id)` (stdout/stderr), `get_experiment_code`, `get_experiment_assets` / `analyze_experiment_asset` |
+| Project overview | `list_projects`, `get_project_details`, `get_all_experiments_summary`, `get_project_tags`, `get_project_logged_item_names`, `validate_project`, `get_default_workspace`, `get_session_info` |
+
+When a tool errors, say so and fall back to the SDK (it reads the key from the environment or
+`~/.comet.config`):
+
+```bash
+uv run python - <<'EOF'
+from comet_ml import API
+from {{ cookiecutter.module_name }} import config
+
+api = API()
+ws = config.COMET_WORKSPACE or api.get_default_workspace()
+latest = api.get_experiments(ws, config.COMET_PROJECT_NAME, page=1, page_size=5,
+                             sort_by="startTime", sort_order="desc")
+for exp in latest:                                   # or [api.get_experiment_by_key("<key>")]
+    print(exp.name, exp.url, exp.get_tags())
+    print({m["name"]: (m["valueCurrent"], m["valueMin"], m["valueMax"]) for m in exp.get_metrics_summary()})
+    print({p["name"]: p["valueCurrent"] for p in exp.get_parameters_summary()})
+EOF
+```
 
 ## Skills
 

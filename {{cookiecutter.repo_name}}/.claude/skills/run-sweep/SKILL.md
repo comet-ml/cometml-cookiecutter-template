@@ -24,7 +24,7 @@ through `/run-training`, which applies the threshold gate.
    make sweep ARGS="$ARGUMENTS" > >(tee "$LOG") 2>&1; echo "SWEEP_EXIT_CODE=$?"
    ```
    The script prints `best val_accuracy=<v> experiment=<key>` and `sweep id: <id>` at the end.
-3. Summarise with MCP (pass `workspace=` and `project_name=` from `.env`):
+3. Summarise with MCP (`AGENTS.md` > "Comet MCP server" for setup):
    `find_tagged_experiments(tag="sweep=<sweep id>", ...)` for this sweep's trial keys (plain `sweep`
    returns every past sweep), then
    `experiment_spreadsheet(workspace, project_name, experiment_keys=[...])` for a CSV of parameters and
